@@ -32,7 +32,15 @@ jobs:
         run: |
           tag=latest
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then tag=next; fi
-          npm publish ./*.tgz --access public --provenance --tag "$tag"
+          version=$(node -p "require('./package.json').version")
+          published=$(npm view "@rsrsai/pi@$version" dist.integrity 2>/dev/null || true)
+          if [[ -n "$published" ]]; then
+            expected=$(node -e "const fs=require('node:fs'),crypto=require('node:crypto');console.log('sha512-'+crypto.createHash('sha512').update(fs.readFileSync(process.argv[1])).digest('base64'))" ./*.tgz)
+            [[ "$published" == "$expected" ]] || { echo 'Published package differs from this release'; exit 1; }
+            echo "Identical @rsrsai/pi@$version is already published"
+          else
+            npm publish ./*.tgz --access public --provenance --tag "$tag"
+          fi
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
