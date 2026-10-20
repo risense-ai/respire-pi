@@ -85,6 +85,8 @@ receipt includes a memory ID. A pending receipt means the engine found
 candidates and has **not** saved the fact; the agent must read those candidates
 and resolve whether to update or attach a record. An unconfirmed receipt means
 the result is unknown: check the library before retrying.
+Storage prefixes request saving the stated fact; they do not request execution
+of a workflow described inside that fact.
 
 To skip automatic memory processing for one message:
 
