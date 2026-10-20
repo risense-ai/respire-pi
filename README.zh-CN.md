@@ -43,9 +43,65 @@ pi install npm:@rsrsai/pi
 `pi --extension ./respire-pi/lib/index.js`，无需修改用户配置。
 插件无需构建，也没有运行时 npm 依赖。
 
+运行 `pi list`，确认只有一个 `npm:@rsrsai/pi` 条目。
+不需要执行 `rsrs inject`，也不需要另装 Skill、配置 MCP 或手写系统提示词。
+插件会自行注入记忆规则。如果旧方案曾向 Pi 的 AGENTS.md 写入 Respire 规则，
+先备份该文件，再仅移除旧 Respire 块，保留其他规则，避免重复注入。
+
 Windows 的 npm/pnpm 命令 shim 需要 PowerShell **7.3+**（`pwsh.exe`）。
 参数通过 JSON 标准输入传递。可以用 `pi --respire-rsrs <原生 rsrs.exe 路径>`
 直接调用原生程序。请仍将 `rsrs` 放入 PATH，供模型通过自身 shell 调用。
+
+## 如何使用
+
+在项目目录运行 `pi`，正常提问即可，例如：
+
+```text
+这个项目之前定下的发布流程是什么？
+```
+
+插件会在模型回答前自动召回相关记忆标题，模型按需读取正文。
+你不需要提及 Respire，不需要专门的验收提示词，也不需要自己执行 recall。
+
+明确保存一条已确认的事实时，在消息开头加存储前缀：
+
+```text
+记：这个项目的发布检查必须包含一次 Windows 冒烟测试。
+```
+
+也支持 `存：`、`记录：`、`记住：` 和 `remember:`。
+以实际回执为准：
+
+- 已存：包含记忆 ID，代表成功写入。
+- 待决（pending）：引擎找到候选，尚未写入；助手需读候选，再决定更新或挂靠。
+- 未确认：结果未知，可能已经写入；必须先查库，不能直接重试。
+
+单条消息不需要自动记忆处理时，使用：
+
+```text
+/nomem 解释一下这个短函数。
+```
+
+下一条消息仍会正常处理。此命令不会移除插件规则。
+普通对话结束时，插件最多提醒助手检查一次新事实是否需要保存，不会自动保存整段会话。
+不要把密码、token、私钥作为记忆提交。
+
+## 更新、卸载与排查
+
+```sh
+pi update npm:@rsrsai/pi
+pi list
+```
+
+更新后重启 Pi 或执行 `/reload`。固定版本可用
+`pi install npm:@rsrsai/pi@0.1.1`。
+卸载执行 `pi remove npm:@rsrsai/pi`，记忆引擎和记忆库仍保留。
+
+召回不可用时，在 Pi 的执行环境运行 `rsrs --version` 和
+`rsrs --client-only status --json`，按引擎流程处理 CLI 缺失、runtime 未运行、
+记忆库未解锁或尚未登录的问题。
+已安装但未加载时，检查 `pi list`，重启或重新加载，并确认未禁用包扩展。
+Windows 还需检查 `pwsh --version` 为 7.3+，且 `rsrs` 位于 PATH。
 
 ## 行为
 

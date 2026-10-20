@@ -55,6 +55,67 @@ Restart Pi or run `/reload` after installation. This checkout needs no build
 or runtime npm dependencies. For local development, use
 `pi install ./respire-pi` from the parent of this checkout.
 
+Confirm installation with `pi list`: there should be one `npm:@rsrsai/pi`
+entry. No `rsrs inject`, AGENTS.md block, skill installation, MCP server, or
+custom system prompt is required: the extension supplies its own memory rules.
+If an older setup already injected Respire rules into Pi's AGENTS.md, back up
+the file and remove only that old Respire block to avoid duplicate instructions.
+Keep unrelated rules.
+
+## Use
+
+Start `pi` in your project and talk normally. For example:
+
+```text
+What did we decide about this project's release process?
+```
+
+The extension automatically recalls matching memory titles before the model
+answers. The model reads relevant records when it needs their details. You do
+not need to mention Respire, write a special test prompt, or run recall yourself.
+
+To explicitly save a confirmed fact, start your message with a storage prefix:
+
+```text
+remember: This project's release checklist requires a Windows smoke test.
+```
+
+Chinese prefixes `记：`, `存：`, `记录：`, and `记住：` work too. A successful
+receipt includes a memory ID. A pending receipt means the engine found
+candidates and has **not** saved the fact; the agent must read those candidates
+and resolve whether to update or attach a record. An unconfirmed receipt means
+the result is unknown: check the library before retrying.
+
+To skip automatic memory processing for one message:
+
+```text
+/nomem Explain what this short function does.
+```
+
+This does not disable the extension for later messages or remove memory rules.
+At the end of an ordinary turn, the extension can ask the model once to review
+whether there are useful new findings to save. It does not copy the transcript
+into memory automatically. Do not submit passwords, tokens, or private keys.
+
+## Update, remove, and troubleshoot
+
+```sh
+pi update npm:@rsrsai/pi
+pi list
+```
+
+Restart Pi or run `/reload` after updating. To pin a release, use
+`pi install npm:@rsrsai/pi@0.1.1`. To uninstall, run
+`pi remove npm:@rsrsai/pi`; this preserves your Respire engine and memory library.
+
+If recall is unavailable, run `rsrs --version` and
+`rsrs --client-only status --json` in Pi's execution environment. Resolve a
+missing CLI, stopped host runtime, locked library, or missing login using the
+engine's own workflow. The plugin cannot resolve those account/runtime states.
+If the package is installed but not loaded, check `pi list`, restart/reload,
+and ensure Pi package extensions have not been disabled. On Windows also check
+`pwsh --version` (7.3+) and that `rsrs` is on PATH.
+
 On Windows, the extension uses PowerShell **7.3+** (`pwsh.exe`) for npm/pnpm
 shims, with JSON on stdin to preserve Unicode, quotes, and shell metacharacters.
 A native `rsrs.exe` can be selected directly and needs no PowerShell bridge:
