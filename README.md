@@ -87,6 +87,9 @@ and resolve whether to update or attach a record. An unconfirmed receipt means
 the result is unknown: check the library before retrying.
 Storage prefixes request saving the stated fact; they do not request execution
 of a workflow described inside that fact.
+Saving can create, update, or merge a record. Updating an existing memory keeps
+its ID and is still a real write. The agent must preserve your meaning and
+verify the saved content rather than add unconfirmed facts or requirements.
 
 To skip automatic memory processing for one message:
 
