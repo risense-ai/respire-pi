@@ -2,10 +2,13 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { recallText, storeText } from '../lib/memory.js'
 
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
 assert.equal(pkg.name, '@rsrsai/pi')
 assert.deepEqual(pkg.pi.extensions, ['./lib/index.js'])
+assert.match(recallText({ status: 'ok', details: [{ id: '12345678', title: 'A saved project fact', score: 0.8 }] }), /rsrs --client-only show <id> --json/)
+assert.match(storeText({ status: 'pending' }).text, /rsrs --client-only show <候选id> --json/)
 const [packed] = JSON.parse(execFileSync(process.execPath, [process.env.npm_execpath, 'pack', '--dry-run', '--ignore-scripts', '--json'], { encoding: 'utf8' }))
 const files = packed.files.map(file => file.path)
 assert.deepEqual(files.sort(), ['LICENSE', 'README.md', 'README.zh-CN.md', 'lib/index.js', 'lib/memory.js', 'lib/rsrs.js', 'package.json'].sort())
