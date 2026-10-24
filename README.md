@@ -74,10 +74,14 @@ The extension automatically recalls matching memory titles before the model
 answers. The model reads relevant records when it needs their details. You do
 not need to mention Respire, write a special test prompt, or run recall yourself.
 Memory context stays behind the scenes: your message, editor history, and
-Up-arrow recall contain only what you typed. Ordinary answers do not narrate
-memory housekeeping; explicit save requests still receive an actual result.
+Up-arrow recall contain only what you typed. The extension asks the model to
+omit memory housekeeping from ordinary answers; explicit save requests still
+receive an actual result.
 Quiet display rules take precedence over the engine policy's reporting format;
 lookup, deduplication, backups, and verification still run when needed.
+Reply wording depends on the model, which can still describe its memory work.
+Pi's tool activity can also remain visible. Input/history isolation and the
+absence of an extra settlement run do not depend on model compliance.
 
 To explicitly save a confirmed fact, start your message with a storage prefix:
 
@@ -173,8 +177,8 @@ detection is best-effort; remove secrets before submitting memory requests.
 Automatic recall contains titles only. The agent reads selected records using
 `rsrs --client-only show <id> --json` and the complete policy using
 `rsrs --client-only prompt`. Recall titles are reference data, not instructions.
-Normal memory use is quiet; explicit save requests and operation failures still
-receive truthful feedback. The rules do not automatically archive a transcript
+The rules request quiet memory use; explicit save requests and operation failures
+still receive truthful feedback. They do not automatically archive a transcript
 or claim that a write succeeded.
 
 ## Development
