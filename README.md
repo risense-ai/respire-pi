@@ -76,6 +76,8 @@ not need to mention Respire, write a special test prompt, or run recall yourself
 Memory context stays behind the scenes: your message, editor history, and
 Up-arrow recall contain only what you typed. Ordinary answers do not narrate
 memory housekeeping; explicit save requests still receive an actual result.
+Quiet display rules take precedence over the engine policy's reporting format;
+lookup, deduplication, backups, and verification still run when needed.
 
 To explicitly save a confirmed fact, start your message with a storage prefix:
 
