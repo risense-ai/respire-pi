@@ -18,7 +18,7 @@ const loaded = await loadExtensions([resolve(pkg.pi.extensions[0])], process.cwd
 assert.deepEqual(loaded.errors, [])
 assert.equal(loaded.extensions.length, 1)
 const { handlers } = loaded.extensions[0]
-for (const name of ['input', 'context', 'before_agent_start', 'session_switch', 'session_shutdown']) {
+for (const name of ['input', 'context', 'before_agent_start', 'agent_start', 'agent_before_settle', 'session_switch', 'session_shutdown']) {
   assert.equal(handlers.get(name)?.length, 1, `Missing Pi handler: ${name}`)
 }
 const event = { messageType: 'user', systemPromptOptions: { sections: { existing: 'preserved' } } }
