@@ -364,6 +364,34 @@ let groups = 0
   groups++
 }
 
+// List response validity gates the nudge: only status ok with a details array is evidence;
+// the freshness window itself is unchanged (stale records still allow a nudge).
+{
+  resetCalls()
+  const h = await readyHarness()
+  await h.emit('agent_start', { type: 'agent_start' })
+  const listImpl = doc => args => args[0] === 'list' ? doc : wrapUpImpl()(args)
+  // unusable responses never nudge, and the latch stays armed for a later round
+  control.impl = listImpl({ status: 'skip' })
+  assert.equal(await settle(h), undefined)
+  control.impl = listImpl({ status: 'paused' })
+  assert.equal(await settle(h), undefined)
+  control.impl = listImpl({ status: 'ok', summary: {} })
+  assert.equal(await settle(h), undefined)
+  control.impl = listImpl({ status: 'ok', details: 'not-an-array' })
+  assert.equal(await settle(h), undefined)
+  assert.equal(listCalls().length, 4)
+  // verifiably empty store: the only null case, and it nudges
+  control.impl = listImpl({ status: 'ok', details: [] })
+  assert.ok(await settle(h))
+  await h.emit('agent_start', { type: 'agent_start' })
+  // usable stale record: freshness window unchanged, still nudges
+  control.impl = listImpl({ status: 'ok', details: [{ id: 'old', updated_at: '2020-01-01T00:00:00.000Z' }] })
+  assert.ok(await settle(h))
+  assert.equal(listCalls().length, 6)
+  groups++
+}
+
 // --- Run-context plumbing -------------------------------------------------
 
 // Every engine call carries the configured executable, the run cwd and an abort-combined signal.
