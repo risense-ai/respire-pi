@@ -392,6 +392,27 @@ let groups = 0
   groups++
 }
 
+// Undeterminable freshness inside details is no evidence either: any invalid entry,
+// unparsable timestamp, or a valid-stale record mixed with an invalid one keeps the
+// check silent — such responses cannot prove the store empty or the records expired.
+{
+  resetCalls()
+  const h = await readyHarness()
+  await h.emit('agent_start', { type: 'agent_start' })
+  const listImpl = doc => args => args[0] === 'list' ? doc : wrapUpImpl()(args)
+  control.impl = listImpl({ status: 'ok', details: [{ id: 'record', updated_at: 'invalid' }] })
+  assert.equal(await settle(h), undefined)
+  control.impl = listImpl({ status: 'ok', details: [{}] })
+  assert.equal(await settle(h), undefined)
+  control.impl = listImpl({ status: 'ok', details: [null] })
+  assert.equal(await settle(h), undefined)
+  // valid stale record + undeterminable record: never passes on the stale best alone
+  control.impl = listImpl({ status: 'ok', details: [{ id: 'old', updated_at: '2020-01-01T00:00:00.000Z' }, { id: 'unknown' }] })
+  assert.equal(await settle(h), undefined)
+  assert.equal(listCalls().length, 4) // the latch stays armed through no-evidence settles
+  groups++
+}
+
 // --- Run-context plumbing -------------------------------------------------
 
 // Every engine call carries the configured executable, the run cwd and an abort-combined signal.

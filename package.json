@@ -1,6 +1,6 @@
 {
   "name": "@rsrsai/pi",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Native Respire memory extension for Pi coding agent",
   "type": "module",
   "license": "MIT",
