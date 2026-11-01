@@ -89,11 +89,29 @@ To explicitly save a confirmed fact, start your message with a storage prefix:
 remember: This project's release checklist requires a Windows smoke test.
 ```
 
-Chinese prefixes `记：`, `存：`, `记录：`, and `记住：` work too. A successful
-receipt includes a memory ID. A pending receipt means the engine found
-candidates and has **not** saved the fact; the agent must read those candidates
-and resolve whether to update or attach a record. An unconfirmed receipt means
-the result is unknown: check the library before retrying.
+Chinese prefixes `记：`, `存：`, `记录：`, and `记住：` work too. Receipts follow
+the result-state contract: `ok` and `warn` with a valid id are both WRITTEN (a
+`warn` carries engine warnings such as an unresolvable parent — it is never a
+failure and must never be re-sent) and are verified by a `show` read-back.
+Verification is a full comparison: the entry id returned by `show`, its title,
+and its complete body (whitespace-trimmed) must all match what was sent. A
+shared prefix, a tampered or missing tail, a different entry, or a different
+title is reported as a DIFFERENT entry to inspect — never called a match. A
+failed or malformed read-back leaves the Saved receipt with an honest
+"unavailable" note. No read-back outcome triggers a second write. A pending
+receipt means the engine found candidates and has **not** saved the fact; it
+relays the candidate ids plus engine-suggested actions, which are labeled as
+suggestions to evaluate, not authorization — secret-bearing entries are dropped
+and every relayed line is length-capped — and the agent must read those
+candidate bodies itself before deciding. An unconfirmed receipt means the
+result is unknown: check the library before retrying — automatic retries are
+forbidden.
+
+Explicit quick-store still writes directly with one `remember`: choosing
+candidates and a parent for an explicit save remains the model's responsibility,
+and this release only adds the write read-back to that path (PI-02 is not
+claimed complete — the background worker's candidate/parent loop is not applied
+to quick-store).
 Storage prefixes request saving the stated fact; they do not request execution
 of a workflow described inside that fact.
 Saving can create, update, or merge a record. Updating an existing memory keeps
@@ -125,7 +143,15 @@ runtime, credential store or agent session. Ordinary worker/model text never goe
 to Pi messages, renderers, session history or editor history.
 
 Only a real user input arms the worker. Continuations, retries, errors and timeouts
-do not re-arm it. Each input permits at most one background review, four model
+do not re-arm it. There is no whole-store time suppression: an engine `list`
+timestamp cannot be attributed to this request (a write from an earlier request
+or a parallel client would falsely suppress this turn's review), so the
+time-based heuristic was removed entirely. Whether this request's fact is
+already stored is decided inside the same bounded worker by its own
+recall/show reads; attribution-based suppression waits for the engine to
+provide attributable per-write evidence. PI-04 is therefore only partially
+resolved: false suppression is gone, at the cost of a possibly redundant
+bounded review. Each input permits at most one background review, four model
 requests, eight memory tool calls, one write attempt, and 30 seconds total. New
 user input (including queued steer/follow-up), reload, session switch and shutdown
 cancel it; an aborted or failed main run does not start it. A successful explicit
@@ -139,7 +165,10 @@ are rejected; a quote substring alone is not proof of a confirmed fact. Policy r
 same-subject recall and candidate-body reads precede writing; important new facts
 need a shown parent. The background worker cannot update/replace existing content;
 same-subject conflicts use engine deduplication/pending for user review. Confirmed writes
-are read back. No shell, force, deletion, runtime, account or configuration tools
+are read back. A warn receipt with a valid id is also a committed write: after a
+successful read-back the worker reports one fixed, sanitized warning
+("Background memory stored with engine warnings (id <8>); inspect if needed")
+instead of swallowing the engine warnings — never a failure or a re-send. No shell, force, deletion, runtime, account or configuration tools
 are available. Empty facts produce no write and no visible reply. Pending, failed
 or unconfirmed work produces only a short fixed warning (TUI notification or a
 non-triggering status message outside TUI), never raw diagnostics or model prose.
@@ -188,7 +217,7 @@ Windows Git Bash drive-letter path issue described in the
 | Trigger | Result |
 | --- | --- |
 | Human input from interactive UI or RPC | Recall up to 5 titles, within 1500 characters |
-| `记：`, `存：`, `记录：`, `记住：`, `remember:` | Attempt explicit storage once; attach the actual engine receipt |
+| `记：`, `存：`, `记录：`, `记住：`, `remember:` | Attempt explicit storage once; attach the actual engine receipt (ok/warn = written + full read-back of id/title/body, pending = candidates + sanitized suggested actions, unknown = read-only verify) |
 | `/nomem` or `#nomem` followed by whitespace/end | Skip automatic memory processing for that input |
 | Suspected credentials | Skip automatic recall and storage |
 | `before_agent_start` | Add stable rules to the structured system prompt |

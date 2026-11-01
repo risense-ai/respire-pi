@@ -42,14 +42,37 @@ async function fixture({ responses = flow(), runImpl, completeImpl, timeoutMs = 
 for (const command of ['remember']) {
   const r = await fixture({ responses: flow(command) })
   assert.deepEqual(r.reports, [])
-  assert.deepEqual(r.calls.map(c => c[0]), ['list','prompt','recall','show',command,'show'])
+  assert.deepEqual(r.calls.map(c => c[0]), ['prompt','recall','show',command,'show'])
   assert.equal(r.completions.length, 4)
   assert.ok(r.calls.every(c => !c.includes('--force')))
   tests++
 }
+// No whole-store time suppression remains: the wrap-up never queries list
+// timestamps at all, so a record written one second before this request, long
+// before it, or by a parallel client during it can never suppress the review.
+{
+  let lists = 0
+  const r = await fixture({ runImpl: args => { if (args[0] === 'list') lists++; return undefined } })
+  assert.equal(lists, 0)
+  assert.equal(r.calls.filter(c => c[0] === 'remember').length, 1)
+  assert.deepEqual(r.reports, [])
+  tests++
+}
+// Already-stored is decided by the worker's own reads: recall + show, then a JSON
+// finish naming the shown ids — no write attempt, no report, bounded as before.
+{
+  const responses = [extract({ facts: [fact] }),
+    answer([call('prompt'), call('recall', { text: 'release smoke test' }), call('show', { id })]),
+    answer([{ type: 'text', text: JSON.stringify({ result: 'already-stored', ids: [id] }) }])]
+  const r = await fixture({ responses })
+  assert.deepEqual(r.calls.map(c => c[0]), ['prompt','recall','show'])
+  assert.deepEqual(r.reports, [])
+  assert.equal(r.completions.length, 3)
+  tests++
+}
 {
   const r = await fixture({ responses: [extract({ facts: [] })] })
-  assert.deepEqual(r.reports, []); assert.equal(r.calls.length, 1); assert.equal(r.completions.length, 1); tests++
+  assert.deepEqual(r.reports, []); assert.equal(r.calls.length, 0); assert.equal(r.completions.length, 1); tests++
 }
 // No partial/unknown write is retried. Controlled status survives; provider prose does not.
 for (const state of ['pending','skip','invalid','throw','cancel','bad-readback','mismatch-content']) {
@@ -68,13 +91,34 @@ for (const state of ['pending','skip','invalid','throw','cancel','bad-readback',
   assert.equal(r.reports.length, 1); assert.match(r.reports[0], state === 'pending' ? /nothing was written/ : /unconfirmed/)
   assert.doesNotMatch(r.reports[0], /secret raw/); tests++
 }
+// A warn receipt is a committed write: with a successful read-back its engine
+// warnings surface as exactly one fixed sanitized notice — never a failure, a
+// re-send, or a second write.
+{
+  const r = await fixture({ runImpl: args => args[0] === 'remember'
+    ? { status: 'warn', summary: { id }, errors: ['unresolvable parent abcdef12'] } : undefined })
+  assert.equal(r.calls.filter(c => c[0] === 'remember').length, 1)
+  assert.deepEqual(r.reports, ['Background memory stored with engine warnings (id abcdef12); inspect if needed'])
+  tests++
+}
+// warn + failed read-back: the existing unconfirmed path, one write attempt only.
+{
+  let shows = 0
+  const r = await fixture({ runImpl: args => {
+    if (args[0] === 'show' && ++shows === 2) return { status: 'ok', summary: { id: '99999999' } }
+    if (args[0] === 'remember') return { status: 'warn', summary: { id } }
+  } })
+  assert.equal(r.calls.filter(c => c[0] === 'remember').length, 1)
+  assert.equal(r.reports.length, 1); assert.match(r.reports[0], /unconfirmed/)
+  tests++
+}
 // An uncooperative provider, read or write has a hard total deadline, and late
 // completions cannot dispatch more actions. A timed-out write stays unconfirmed.
 for (const phase of ['model','read','write']) {
   let late
   const opts = { timeoutMs: 10 }
   if (phase === 'model') opts.completeImpl = () => new Promise(resolve => { late = resolve })
-  else opts.runImpl = args => args[0] === (phase === 'read' ? 'list' : 'remember') ? new Promise(resolve => { late = resolve }) : undefined
+  else opts.runImpl = args => args[0] === (phase === 'read' ? 'prompt' : 'remember') ? new Promise(resolve => { late = resolve }) : undefined
   const r = await fixture(opts)
   const before = r.calls.length
   assert.equal(r.controller.signal.aborted, true); assert.equal(r.reports.length, 1)
@@ -90,7 +134,7 @@ for (const value of [
   { facts: [ { ...fact, text: 'password=do-not-store' } ] }, { facts: [], unexpected: true },
 ]) {
   const r = await fixture({ responses: [extract(value)] })
-  assert.equal(r.reports.length, 1); assert.equal(r.calls.length, 1); tests++
+  assert.equal(r.reports.length, 1); assert.equal(r.calls.length, 0); tests++
 }
 // Bypass attempts: no missing policy/candidate body, no unknown commands/options,
 // no altered candidate fact, and no second write even in one model response.
@@ -118,7 +162,7 @@ for (const [observation, candidate, role] of [
   const candidateFact = { text: candidate, title: candidate, status: 'confirmed', sources: [{ index: 0, quote: candidate }] }
   await wrapUp({ model: {}, registry: { complete: async () => extract({ facts: [candidateFact] }) }, transcript: input,
     controller: new AbortController(), run: async args => { writes.push(args); return { status: 'ok', details: [] } }, report: m => reports.push(m) })
-  assert.equal(reports.length, 1); assert.deepEqual(writes, [['list', '--limit', '3']]); tests++
+  assert.equal(reports.length, 1); assert.deepEqual(writes, []); tests++
 }
 
 // Reasoning model thinking blocks are ignored, never copied to status/history.
@@ -141,7 +185,7 @@ for (const [observation, candidate, role] of [
 // Positional arguments cannot become CLI flags; schema cannot open a shell path.
 {
   const r = await fixture({ responses: [extract({ facts: [fact] }), answer([call('recall', { text: '--force' })])] })
-  assert.equal(r.calls.length, 1); assert.equal(r.reports.length, 1); tests++
+  assert.equal(r.calls.length, 0); assert.equal(r.reports.length, 1); tests++
 }
 
 // Successful ordinary final text from the isolated worker never leaks into reports.
