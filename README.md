@@ -81,7 +81,7 @@ Quiet display rules take precedence over the engine policy's reporting format;
 lookup, deduplication, backups, and verification still run when needed.
 Reply wording depends on the model, which can still describe its memory work.
 Pi's tool activity can also remain visible. Input/history isolation and the
-absence of an extra settlement run do not depend on model compliance.
+absence of a main-agent settlement continuation do not depend on model compliance. The isolated worker's ordinary text is never sent to the UI or session history.
 
 To explicitly save a confirmed fact, start your message with a storage prefix:
 
@@ -108,8 +108,49 @@ To skip automatic memory processing for one message:
 
 This does not disable the extension for later messages or remove memory rules.
 The memory rules ask the model to save useful new findings before its normal
-answer. The extension does not start a second settlement turn or automatically
-copy the transcript into memory. Do not submit passwords, tokens, or private keys.
+answer. The extension never continues the main agent for memory housekeeping. After a completed
+normal request, it can review that request once in an isolated background model call
+and perform one deduplicated write attempt when needed. It never automatically
+copies the transcript into memory. Do not submit passwords, tokens, or private keys.
+
+## Bounded background wrap-up
+
+The former main-agent wrap-up continuation could repeat because a continuation
+emits `agent_start` again. This version never returns `continue: true` or injects
+a settlement prompt. It snapshots the completed request and selected host model,
+cwd and executable, then launches a separate memory-only worker after settlement.
+Pi can finish the normal answer immediately; the event handler does not await it.
+The host ModelRegistry reuses the configured provider/authentication without a new
+runtime, credential store or agent session. Ordinary worker/model text never goes
+to Pi messages, renderers, session history or editor history.
+
+Only a real user input arms the worker. Continuations, retries, errors and timeouts
+do not re-arm it. Each input permits at most one background review, four model
+requests, eight memory tool calls, one write attempt, and 30 seconds total. New
+user input (including queued steer/follow-up), reload, session switch and shutdown
+cancel it; an aborted or failed main run does not start it. A successful explicit
+store is not repeated; pending/unconfirmed explicit storage is not retried either.
+
+The worker receives only text from the current request, excluding images and
+hidden reasoning. Oversized or credential-bearing context is rejected. A strict
+one-fact extraction must preserve complete observed lines verbatim (including negation),
+with a deterministic title. Proposals/questions and unsupported assistant assertions
+are rejected; a quote substring alone is not proof of a confirmed fact. Policy reads,
+same-subject recall and candidate-body reads precede writing; important new facts
+need a shown parent. The background worker cannot update/replace existing content;
+same-subject conflicts use engine deduplication/pending for user review. Confirmed writes
+are read back. No shell, force, deletion, runtime, account or configuration tools
+are available. Empty facts produce no write and no visible reply. Pending, failed
+or unconfirmed work produces only a short fixed warning (TUI notification or a
+non-triggering status message outside TUI), never raw diagnostics or model prose.
+Unknown writes are never retried automatically.
+
+Tests use synthetic requests, models and memory stubs. Real AgentSession tests with synthetic providers and strict local CLI fixtures cover idle,
+write/content readback and preservation of existing records, background and main failures, queued input, cancellation,
+reload and real session replacement. These
+Pi 1.3.0/1.4.0 tests do not prove a real Windows GUI/provider/database end-to-end
+run. Provider cancellation remains subject to the provider honoring its signal;
+the worker itself stops on its deadline and ignores late results.
 
 ## Update, remove, and troubleshoot
 
@@ -152,7 +193,7 @@ Windows Git Bash drive-letter path issue described in the
 | Suspected credentials | Skip automatic recall and storage |
 | `before_agent_start` | Add stable rules to the structured system prompt |
 | Normal task | Use memory and save necessary findings before the final answer |
-| Settlement | No additional model run or housekeeping reply |
+| Settlement | At most one detached background review per real input; no main-agent continuation or housekeeping reply |
 
 Recall and receipts are added through Pi's request-time `context` hook as
 hidden custom messages beside the corresponding user input, including queued
@@ -185,11 +226,12 @@ or claim that a write succeeded.
 
 ```sh
 npm run check
+npm run behavior
 npm run verify:package
 ```
 
-CI checks syntax, the distribution contents, and loading in Pi 1.3.0 on Linux,
-Windows, and macOS. The pinned Pi development dependency is not shipped.
+CI checks syntax, synthetic behavior, package contents, and actual extension loading
+and ModelRegistry.complete forwarding in Pi 1.3.0 and 1.4.0 on Linux, Windows, and macOS. The pinned Pi development dependency is not shipped.
 
 ## Release
 

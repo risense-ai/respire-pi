@@ -8,11 +8,12 @@ permissions:
   contents: read
 jobs:
   check:
-    name: Check (${{ matrix.os }})
+    name: Check (${{ matrix.os }}, Pi ${{ matrix.pi }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+        pi: ['1.3.0', '1.4.0']
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
@@ -24,6 +25,7 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm install --ignore-scripts --no-audit --no-fund --no-save --package-lock=false @earendil-works/pi-coding-agent@${{ matrix.pi }}
       - run: npm run check
       - run: npm run behavior
       - run: npm run verify:package
