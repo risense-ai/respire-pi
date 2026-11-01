@@ -102,6 +102,12 @@ for (const bad of [call('forget', { id }), call('remember', { text, title: text,
   const responses = flow(); responses[3].content.push(call('remember', { text, title: text, parent: id }))
   const r = await fixture({ responses }); assert.equal(r.calls.filter(c => c[0] === 'remember').length, 1); tests++
 }
+// Positional arguments cannot become CLI flags; schema cannot open a shell path.
+{
+  const r = await fixture({ responses: [extract({ facts: [fact] }), answer([call('recall', { text: '--force' })])] })
+  assert.equal(r.calls.length, 1); assert.equal(r.reports.length, 1); tests++
+}
+
 // Successful ordinary final text from the isolated worker never leaks into reports.
 {
   const r = await fixture({ responses: [extract({ facts: [fact] }), answer([{ type: 'text', text: '无新增事实，无需存储' }])] })

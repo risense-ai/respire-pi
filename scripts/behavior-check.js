@@ -316,6 +316,22 @@ for (const next of ['input','steer','followUp','session_start','session_switch',
   groups++
 }
 
+// A queued input can be absent from an intermediate continuation snapshot;
+// the final valid boundary clears that temporary unavailable state.
+{
+  resetCalls()
+  const h = await readyHarness()
+  const prompt = h.prompt
+  await turn(h, 'queued steer', { streaming: 'steer' })
+  h.prompt = prompt
+  await settle(h)
+  h.prompt = 'queued steer'
+  let calls = 0
+  h.ctx.modelRegistry.complete = async () => { calls++; return { content: [{ type: 'text', text: '{"facts":[]}' }], stopReason: 'stop' } }
+  await settle(h); await h.emit('agent_settled', { aborted: false }); await flush()
+  assert.equal(calls, 1); assert.deepEqual(h.notifications, []); groups++
+}
+
 // Background failure surfaces a fixed warning, also in non-TUI, without another turn.
 {
   resetCalls()
