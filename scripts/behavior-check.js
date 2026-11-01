@@ -10,7 +10,7 @@ if (typeof nodeModule.registerHooks === 'function') nodeModule.registerHooks({ r
 else nodeModule.register(new URL('./behavior-hooks.mjs', import.meta.url).href)
 
 const { default: respire } = await import('../lib/index.js')
-const { RULES } = await import('../lib/memory.js')
+const { RULES, storeText } = await import('../lib/memory.js')
 const { calls, control, resetCalls, statusCalls, listCalls } = await import('./behavior-rsrs-stub.mjs')
 
 function harness({ cwd = '/proj/work', hasUI = true, flags = {} } = {}) {
@@ -65,15 +65,10 @@ const healthyStatus = () => ({ status: 'ok', summary: { session: { has_session: 
 const recallDoc = () => ({ status: 'ok', details: [{ id: 'a1b2c3d4-1111-2222-3333-444455556666', title: 'Known project fact', score: 0.5 }] })
 const storeOk = () => ({ status: 'ok', summary: { id: 'b2c3d4e5' } })
 
-function wrapUpImpl({ fresh = false } = {}) {
+function wrapUpImpl() {
   return args => {
     if (args[0] === 'status') return healthyStatus()
     if (args[0] === 'recall') return recallDoc()
-    if (args[0] === 'list') {
-      return fresh
-        ? { status: 'ok', details: [{ id: 'recent-1', updated_at: new Date().toISOString() }] }
-        : { status: 'ok', details: [{ id: 'old-1', updated_at: '2020-01-01T00:00:00.000Z' }] }
-    }
     return { status: 'skip' }
   }
 }
@@ -81,7 +76,7 @@ function wrapUpImpl({ fresh = false } = {}) {
 // Probe rides the first actionable input; ready harness for wrap-up tests.
 async function readyHarness(opts) {
   const h = harness(opts)
-  control.impl = wrapUpImpl(opts)
+  control.impl = wrapUpImpl()
   await turn(h, 'kick-off question')
   return h
 }
@@ -241,6 +236,111 @@ let groups = 0
   groups++
 }
 
+// Explicit store read-back (PI-02 review): "verified" requires the shown id,
+// title, and FULL body to match. A shared 40-character prefix with a tampered
+// tail, a different returned entry, a different title, or a malformed envelope
+// never verifies — and never triggers a second write.
+{
+  const content = 'release checklist requires a Windows smoke test'
+  const id = 'b2c3d4e5'
+  for (const [kind, showDoc] of [
+    ['verified', { status: 'ok', summary: { id }, details: { entry: { title: content, content } } }],
+    ['wrong-id', { status: 'ok', summary: { id: 'ffffffff' }, details: { entry: { title: content, content } } }],
+    ['prefix-tampered-tail', { status: 'ok', summary: { id }, details: { entry: { title: content, content: `${content.slice(0, 40)} plus injected extra conditions` } } }],
+    ['truncated-tail', { status: 'ok', summary: { id }, details: { entry: { title: content, content: content.slice(0, 40) } } }],
+    ['wrong-title', { status: 'ok', summary: { id }, details: { entry: { title: 'Different title', content } } }],
+    ['malformed-envelope', { status: 'ok', summary: { id }, details: { entry: 'not-an-object' } }],
+    ['not-ok', { status: 'error' }],
+  ]) {
+    resetCalls()
+    const h = harness()
+    control.impl = args => {
+      if (args[0] === 'status') return healthyStatus()
+      if (args[0] === 'remember') return storeOk()
+      if (args[0] === 'show') return showDoc
+      return { status: 'skip' }
+    }
+    await turn(h, `记： ${content}`)
+    assert.equal(calls.filter(call => call.args[0] === 'remember').length, 1, `${kind}: exactly one write`)
+    const { messages } = await project(h, `记： ${content}`)
+    const body = messages[1].content
+    if (kind === 'verified') assert.match(body, /Write verified by read-back \(id, title and full content match\)\./)
+    else if (['wrong-id','prefix-tampered-tail','truncated-tail','wrong-title'].includes(kind)) {
+      assert.match(body, /Read-back shows a DIFFERENT title\/content than sent/)
+      assert.doesNotMatch(body, /Write verified/)
+    } else {
+      assert.match(body, /Read-back unavailable/)
+      assert.match(body, /【respire · stored】/) // a malformed/failed read-back keeps the Saved receipt
+    }
+    groups++
+  }
+}
+// A read-back engine failure also stays honest: Saved + unavailable, one write.
+{
+  resetCalls()
+  const h = harness()
+  control.impl = args => {
+    if (args[0] === 'status') return healthyStatus()
+    if (args[0] === 'remember') return storeOk()
+    if (args[0] === 'show') throw new Error('engine down')
+    return { status: 'skip' }
+  }
+  await turn(h, '记： release checklist requires a Windows smoke test')
+  const { messages } = await project(h, '记： release checklist requires a Windows smoke test')
+  assert.match(messages[1].content, /Read-back unavailable/)
+  assert.equal(calls.filter(call => call.args[0] === 'remember').length, 1)
+  groups++
+}
+
+// Explicit warn receipt (review #4, explicit path): a warn with a valid id is a
+// committed write — sanitized warnings, a read-back verdict, exactly one write,
+// never a failure or a retry.
+{
+  resetCalls()
+  const content = 'release checklist requires a Windows smoke test'
+  const h = harness()
+  control.impl = args => {
+    if (args[0] === 'status') return healthyStatus()
+    if (args[0] === 'remember') return { status: 'warn', summary: { id: 'b2c3d4e5' }, errors: ['unresolvable parent', 'token=abcd1234 leaked'] }
+    if (args[0] === 'show') return { status: 'ok', summary: { id: 'b2c3d4e5' }, details: { entry: { title: content, content } } }
+    return { status: 'skip' }
+  }
+  await turn(h, `记： ${content}`)
+  const { messages } = await project(h, `记： ${content}`)
+  assert.match(messages[1].content, /【respire · stored】Saved with warnings \(unresolvable parent\)/)
+  assert.doesNotMatch(messages[1].content, /abcd1234/)
+  assert.match(messages[1].content, /Write verified by read-back \(id, title and full content match\)\./)
+  assert.equal(calls.filter(call => call.args[0] === 'remember').length, 1)
+  groups++
+}
+
+// Relayed engine errors/actions are untrusted text: secret-bearing entries are
+// dropped entirely, non-strings skipped, each line capped at 200 characters,
+// at most 6 actions, and actions are labeled as suggestions, not authorization.
+{
+  const leaking = ['sk-abcdefghijklmnop merge into candidate 1', 'token=abcd1234efgh read again']
+  const pending = storeText({ status: 'pending', items: [], actions: [
+    ...leaking,                                     // credentials -> dropped
+    'x'.repeat(500),                                // over-long -> capped at 200
+    42, null, undefined, { op: 'merge' },           // non-strings -> skipped
+    'read candidate bodies before deciding',        // safe -> kept verbatim
+    ...Array.from({ length: 8 }, () => 'safe extra step'), // count cap -> 6 lines total
+  ] })
+  assert.equal(pending.stored, false)
+  assert.ok(leaking.every(line => !pending.text.includes(line)), 'credential-bearing actions dropped')
+  assert.match(pending.text, /suggestions to evaluate, not authorization/)
+  assert.ok(pending.text.includes('x'.repeat(200)), 'long action capped at 200 chars')
+  assert.ok(!pending.text.includes('x'.repeat(201)), 'no action line may exceed 200 chars')
+  const actionLines = pending.text.split('\n').filter(line => line.startsWith('  '))
+  assert.equal(actionLines.length, 6)
+  assert.ok(actionLines.some(line => line.includes('read candidate bodies before deciding')))
+  const warn = storeText({ status: 'warn', summary: { id: 'b2c3d4e5' }, errors: ['token=abcd1234 leaked', 'unresolvable parent', 7, undefined] })
+  assert.equal(warn.stored, true)
+  assert.match(warn.text, /Saved with warnings \(unresolvable parent\)/)
+  assert.ok(!warn.text.includes('abcd1234'), 'credential-bearing engine error dropped')
+  groups++
+}
+
 // --- Real lifecycle: settle -> continuation -> agent_start -> settle -> settled.
 {
   resetCalls()
@@ -255,7 +355,9 @@ let groups = 0
   for (let i=0;i<12;i++) { await h.emit('agent_start', {}); await settle(h); await h.emit('agent_settled', { aborted: false }) }
   await flush()
   assert.equal(modelCalls, 1)
-  assert.equal(listCalls().length, 1)
+  // No whole-store freshness query anymore: no list call at any point, so a
+  // recent engine write can never suppress (or fake-proof) this turn's review.
+  assert.equal(listCalls().length, 0)
   assert.equal(calls.filter(c => c.args[0] === 'remember').length, 0)
   assert.deepEqual(h.sent, [])
   assert.deepEqual(h.notifications, [])
@@ -266,10 +368,12 @@ let groups = 0
   groups++
 }
 
-// Fresh store, explicit store (including pending), and unsuccessful runs never run a worker.
-for (const kind of ['fresh','explicit','pending','aborted','error']) {
+// Explicit store (including pending) and unsuccessful runs never run a worker.
+// (Freshness suppression is gone entirely: a recent engine write neither skips
+// nor short-circuits the review, so "fresh" is no longer a no-worker case.)
+for (const kind of ['explicit','pending','aborted','error']) {
   resetCalls()
-  const h = await readyHarness({ fresh: kind === 'fresh' })
+  const h = await readyHarness()
   let models = 0
   h.ctx.modelRegistry.complete = async () => { models++; throw Error('must not call') }
   if (kind === 'explicit' || kind === 'pending') {
