@@ -18,7 +18,7 @@ const loaded = await loadExtensions([resolve(pkg.pi.extensions[0])], process.cwd
 assert.deepEqual(loaded.errors, [])
 assert.equal(loaded.extensions.length, 1)
 const { handlers } = loaded.extensions[0]
-for (const name of ['input', 'context', 'before_agent_start', 'agent_settled', 'agent_before_settle', 'session_switch', 'session_shutdown']) {
+for (const name of ['input', 'context', 'before_agent_start', 'agent_settled', 'agent_before_settle', 'session_before_switch', 'session_switch', 'session_shutdown']) {
   assert.equal(handlers.get(name)?.length, 1, `Missing Pi handler: ${name}`)
 }
 const event = { messageType: 'user', systemPromptOptions: { sections: { existing: 'preserved' } } }
@@ -42,10 +42,10 @@ assert.match(projected.messages[1].content, /respire · skipped/)
 await handlers.get('session_switch')[0]()
 assert.deepEqual((await handlers.get('context')[0]({ messages: history }, {})).messages, history)
 await handlers.get('session_shutdown')[0]()
-console.log(`Verified ${packed.filename}: ${files.length} files, Pi loader, ModelRegistry.complete and lifecycle`)
 
 const { ModelRegistry } = await import('@earendil-works/pi-coding-agent')
 const sentinel = { content: [], stopReason: 'stop' }
 const model = { id: 'synthetic' }, context = { messages: [] }, options = { signal: new AbortController().signal }
 const registry = new ModelRegistry({ complete: async (...args) => { assert.deepEqual(args, [model, context, options]); return sentinel } })
 assert.equal(await registry.complete(model, context, options), sentinel)
+console.log(`Verified ${packed.filename}: ${files.length} files, Pi loader, ModelRegistry.complete and lifecycle`)

@@ -133,7 +133,9 @@ store is not repeated; pending/unconfirmed explicit storage is not retried eithe
 
 The worker receives only text from the current request, excluding images and
 hidden reasoning. Oversized or credential-bearing context is rejected. A strict
-one-fact extraction must cite exact excerpts before any write. Policy reads,
+one-fact extraction must preserve complete observed lines verbatim (including negation),
+with a deterministic title. Proposals/questions and unsupported assistant assertions
+are rejected; a quote substring alone is not proof of a confirmed fact. Policy reads,
 same-subject recall and candidate-body reads precede writing; important new facts
 need a shown parent, existing facts can update a shown ID, and confirmed writes
 are read back. No shell, force, deletion, runtime, account or configuration tools
@@ -142,8 +144,10 @@ or unconfirmed work produces only a short fixed warning (TUI notification or a
 non-triggering status message outside TUI), never raw diagnostics or model prose.
 Unknown writes are never retried automatically.
 
-Tests use synthetic requests, models and memory stubs. Actual Pi 1.3.0/1.4.0 API
-and loader checks do not prove a real Windows GUI/provider/database end-to-end
+Tests use synthetic requests, models and memory stubs. Real AgentSession tests with synthetic providers and strict local CLI fixtures cover idle,
+write/update with content readback, background and main failures, queued input, cancellation,
+reload and real session replacement. These
+Pi 1.3.0/1.4.0 tests do not prove a real Windows GUI/provider/database end-to-end
 run. Provider cancellation remains subject to the provider honoring its signal;
 the worker itself stops on its deadline and ignores late results.
 
@@ -221,6 +225,7 @@ or claim that a write succeeded.
 
 ```sh
 npm run check
+npm run behavior
 npm run verify:package
 ```
 

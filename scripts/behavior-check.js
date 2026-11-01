@@ -1,6 +1,6 @@
 // Behavioral tests for the Pi extension, run against a fake pi harness with a stubbed
 // rsrs engine (scripts/behavior-rsrs-stub.mjs, wired in through scripts/behavior-hooks.mjs).
-// Covers: probe states on the request-only channel, wrap-up gating per run, and the
+// Covers: probe states on the request-only channel, wrap-up budgets per real input, and the
 // run-context plumbing (executable, cwd, abort signal) of the engine calls.
 import * as nodeModule from 'node:module'
 import assert from 'node:assert/strict'
@@ -27,9 +27,12 @@ function harness({ cwd = '/proj/work', hasUI = true, flags = {} } = {}) {
   respire(pi)
   const notifications = []
   const sent = []
-  pi.sendMessage = (...args) => sent.push(args)
+  let sessionId = 'origin-session'
+  const deliveredTo = []
+  pi.sendMessage = (...args) => { sent.push(args); deliveredTo.push(sessionId) }
   const ctx = {
     cwd,
+    sessionManager: { getSessionId: () => sessionId },
     hasUI,
     signal: undefined,
     model: { id: 'fixture' },
@@ -41,7 +44,7 @@ function harness({ cwd = '/proj/work', hasUI = true, flags = {} } = {}) {
     for (const handler of handlers.get(name) ?? []) result = await handler(event, ctxArg)
     return result
   }
-  return { ctx, emit, notifications, sent }
+  return { ctx, emit, notifications, sent, deliveredTo, setSession: value => { sessionId = value } }
 }
 
 const turn = (h, text, { streaming } = {}) => { h.prompt = text; return h.emit('input', { type: 'input', source: 'interactive', text, streamingBehavior: streaming }) }
@@ -330,6 +333,38 @@ for (const next of ['input','steer','followUp','session_start','session_switch',
   h.ctx.modelRegistry.complete = async () => { calls++; return { content: [{ type: 'text', text: '{"facts":[]}' }], stopReason: 'stop' } }
   await settle(h); await h.emit('agent_settled', { aborted: false }); await flush()
   assert.equal(calls, 1); assert.deepEqual(h.notifications, []); groups++
+}
+
+// A cancelled unknown write cannot post into the destination session. A fixed
+// warning is retained for its origin, and delivered when that identity returns.
+for (const destination of ['new-session', 'new-input']) {
+  resetCalls()
+  const h = await readyHarness({ hasUI: false })
+  const fact = { text: 'Confirmed fact.', title: 'Confirmed fact.', status: 'confirmed', sources: [{ index: 0, quote: 'Confirmed fact.' }] }
+  await turn(h, fact.text)
+  const parent = 'abcdef12-1111-2222-3333-444455556666'
+  let phase=0, writing=false
+  h.ctx.modelRegistry.complete = async () => {
+    const tool = (command, extra={}) => ({ type:'toolCall', id:command, name:'respire_memory', arguments:{command,...extra} })
+    const steps = [[{type:'text',text:JSON.stringify({facts:[fact]})}], [tool('prompt'),tool('recall',{text:'Confirmed'})], [tool('show',{id:parent})], [tool('remember',{text:fact.text,title:fact.title,parent})]]
+    return {role:'assistant',content:steps[phase++],stopReason:'stop'}
+  }
+  control.impl = (args, opts) => {
+    if (args[0]==='list') return {status:'ok',details:[]}
+    if (args[0]==='prompt') return {status:'ok',summary:{instructions:'policy'}}
+    if (args[0]==='recall') return {status:'ok',details:[{id:parent,title:'parent'}]}
+    if (args[0]==='show') return {status:'ok',summary:{id:parent},details:{entry:{content:'parent',title:'parent'}}}
+    if (args[0]==='remember') { writing=true; return new Promise((_,reject)=>opts.signal.addEventListener('abort',()=>reject(Error('cancelled')),{once:true})) }
+    return healthyStatus()
+  }
+  await settle(h);await h.emit('agent_settled',{aborted:false});await flush();assert.equal(writing,true)
+  if (destination==='new-session') {
+    h.setSession('destination');await h.emit('session_switch',{});await flush()
+    assert.equal(h.sent.length,0)
+    h.setSession('origin-session');await h.emit('session_switch',{});await flush()
+  } else { await turn(h,'/nomem next request');await flush() }
+  assert.equal(h.sent.length,1);assert.match(h.sent[0][0].content,/unconfirmed/)
+  assert.deepEqual(h.deliveredTo,['origin-session']);assert.equal(h.sent[0][1].triggerTurn,false);groups++
 }
 
 // Background failure surfaces a fixed warning, also in non-TUI, without another turn.

@@ -3,7 +3,7 @@ import { wrapUp, snapshot, LIMITS } from '../lib/wrap-up.js'
 
 const id = 'abcdef12-1111-2222-3333-444455556666'
 const text = 'The project release requires a smoke test.'
-const fact = { text, title: text, sources: [{ index: 0, quote: text }] }
+const fact = { text, title: text, status: 'confirmed', sources: [{ index: 0, quote: text }] }
 const transcript = JSON.stringify([{ role: 'user', text }])
 const answer = content => ({ role: 'assistant', content, stopReason: 'stop', timestamp: Date.now() })
 const extract = value => answer([{ type: 'text', text: JSON.stringify(value) }])
@@ -17,11 +17,12 @@ async function fixture({ responses = flow(), runImpl, completeImpl, timeoutMs = 
   const reports = [], calls = [], completions = [], controller = new AbortController()
   const run = async (args, signal) => {
     calls.push(args)
+    if (args[0] === 'update') assert.deepEqual(args, ['update', id, '--content', text, '--title', text], 'actual CLI parser requires --content')
     if (runImpl) { const result = await runImpl(args, signal); if (result !== undefined) return result }
     if (args[0] === 'list') return { status: 'ok', details: [] }
     if (args[0] === 'prompt') return { status: 'ok', summary: { instructions: 'Read before write. Do not force.' } }
     if (args[0] === 'recall') return { status: 'ok', details: [{ id, title: 'Existing fact' }] }
-    if (args[0] === 'show') return { status: 'ok', summary: { id }, details: { content: text } }
+    if (args[0] === 'show') return { status: 'ok', summary: { id }, details: { entry: { content: text, title: text } } }
     return { status: 'ok', summary: { id } }
   }
   const model = { id: 'synthetic-model' }
@@ -51,14 +52,17 @@ for (const command of ['remember', 'update']) {
   assert.deepEqual(r.reports, []); assert.equal(r.calls.length, 1); assert.equal(r.completions.length, 1); tests++
 }
 // No partial/unknown write is retried. Controlled status survives; provider prose does not.
-for (const state of ['pending','skip','invalid','throw','cancel','bad-readback']) {
+for (const state of ['pending','skip','invalid','throw','cancel','bad-readback','mismatch-content']) {
   let shows = 0
   const r = await fixture({ runImpl: (args, signal) => {
-    if (args[0] === 'show' && ++shows === 2 && state === 'bad-readback') return { status: 'ok', summary: { id: '99999999' } }
+    if (args[0] === 'show' && ++shows === 2) {
+      if (state === 'bad-readback') return { status: 'ok', summary: { id: '99999999' } }
+      if (state === 'mismatch-content') return { status: 'ok', summary: { id }, details: { entry: { content: 'different fact', title: text } } }
+    }
     if (args[0] !== 'remember') return
     if (state === 'throw') throw Error('secret raw engine output')
     if (state === 'cancel') { signal.dispatchEvent(new Event('abort')); return new Promise(() => {}) }
-    if (state !== 'bad-readback') return { status: state }
+    if (!['bad-readback','mismatch-content'].includes(state)) return { status: state }
   } })
   assert.equal(r.calls.filter(c => c[0] === 'remember').length, 1)
   assert.equal(r.reports.length, 1); assert.match(r.reports[0], state === 'pending' ? /nothing was written/ : /unconfirmed/)
@@ -102,6 +106,21 @@ for (const bad of [call('forget', { id }), call('remember', { text, title: text,
   const responses = flow(); responses[3].content.push(call('remember', { text, title: text, parent: id }))
   const r = await fixture({ responses }); assert.equal(r.calls.filter(c => c[0] === 'remember').length, 1); tests++
 }
+// Preserve negation and exclude proposals/unsupported assistant assertions.
+for (const [observation, candidate, role] of [
+  ['release not approved', 'release approved', 'user'],
+  ['release not approved', 'release', 'user'],
+  ['I propose approving the release', 'I propose approving the release', 'user'],
+  ['release approved', 'release approved', 'assistant'],
+]) {
+  const reports = [], writes = []
+  const input = JSON.stringify([{ role, text: observation, confirmed: role === 'user' }])
+  const candidateFact = { text: candidate, title: candidate, status: 'confirmed', sources: [{ index: 0, quote: candidate }] }
+  await wrapUp({ model: {}, registry: { complete: async () => extract({ facts: [candidateFact] }) }, transcript: input,
+    controller: new AbortController(), run: async args => { writes.push(args); return { status: 'ok', details: [] } }, report: m => reports.push(m) })
+  assert.equal(reports.length, 1); assert.deepEqual(writes, [['list', '--limit', '3']]); tests++
+}
+
 // Positional arguments cannot become CLI flags; schema cannot open a shell path.
 {
   const r = await fixture({ responses: [extract({ facts: [fact] }), answer([call('recall', { text: '--force' })])] })
