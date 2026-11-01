@@ -89,11 +89,16 @@ To explicitly save a confirmed fact, start your message with a storage prefix:
 remember: This project's release checklist requires a Windows smoke test.
 ```
 
-Chinese prefixes `记：`, `存：`, `记录：`, and `记住：` work too. A successful
-receipt includes a memory ID. A pending receipt means the engine found
-candidates and has **not** saved the fact; the agent must read those candidates
-and resolve whether to update or attach a record. An unconfirmed receipt means
-the result is unknown: check the library before retrying.
+Chinese prefixes `记：`, `存：`, `记录：`, and `记住：` work too. Receipts follow
+the result-state contract: `ok` and `warn` with a valid id are both WRITTEN (a
+`warn` carries engine warnings such as an unresolvable parent — it is never a
+failure and must never be re-sent) and are verified by a `show` read-back that
+reports verified / mismatch / unavailable honestly. A pending receipt means the
+engine found candidates and has **not** saved the fact; it relays the candidate
+ids plus the engine-suggested actions (merge > attach > new), and the agent must
+read those candidate bodies before deciding. An unconfirmed receipt means the
+result is unknown: check the library before retrying — automatic retries are
+forbidden.
 Storage prefixes request saving the stated fact; they do not request execution
 of a workflow described inside that fact.
 Saving can create, update, or merge a record. Updating an existing memory keeps
@@ -125,7 +130,9 @@ runtime, credential store or agent session. Ordinary worker/model text never goe
 to Pi messages, renderers, session history or editor history.
 
 Only a real user input arms the worker. Continuations, retries, errors and timeouts
-do not re-arm it. Each input permits at most one background review, four model
+do not re-arm it. Freshness suppression is request-scoped: an engine write counts
+as "already stored" only when it happened during this request — records written by
+earlier requests never suppress this turn's wrap-up. Each input permits at most one background review, four model
 requests, eight memory tool calls, one write attempt, and 30 seconds total. New
 user input (including queued steer/follow-up), reload, session switch and shutdown
 cancel it; an aborted or failed main run does not start it. A successful explicit
@@ -188,7 +195,7 @@ Windows Git Bash drive-letter path issue described in the
 | Trigger | Result |
 | --- | --- |
 | Human input from interactive UI or RPC | Recall up to 5 titles, within 1500 characters |
-| `记：`, `存：`, `记录：`, `记住：`, `remember:` | Attempt explicit storage once; attach the actual engine receipt |
+| `记：`, `存：`, `记录：`, `记住：`, `remember:` | Attempt explicit storage once; attach the actual engine receipt (ok/warn = written + read-back, pending = candidates + suggested actions, unknown = read-only verify) |
 | `/nomem` or `#nomem` followed by whitespace/end | Skip automatic memory processing for that input |
 | Suspected credentials | Skip automatic recall and storage |
 | `before_agent_start` | Add stable rules to the structured system prompt |
