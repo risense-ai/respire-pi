@@ -26,10 +26,14 @@ function harness({ cwd = '/proj/work', hasUI = true, flags = {} } = {}) {
   }
   respire(pi)
   const notifications = []
+  const sent = []
+  pi.sendMessage = (...args) => sent.push(args)
   const ctx = {
     cwd,
     hasUI,
     signal: undefined,
+    model: { id: 'fixture' },
+    modelRegistry: { complete: async () => ({ content: [{ type: 'text', text: '{"facts":[]}' }], stopReason: 'stop' }) },
     ui: { notify(message, level) { notifications.push({ message, level }) } },
   }
   const emit = async (name, event, ctxArg = ctx) => {
@@ -37,14 +41,16 @@ function harness({ cwd = '/proj/work', hasUI = true, flags = {} } = {}) {
     for (const handler of handlers.get(name) ?? []) result = await handler(event, ctxArg)
     return result
   }
-  return { ctx, emit, notifications }
+  return { ctx, emit, notifications, sent }
 }
 
-const turn = (h, text, { streaming } = {}) =>
-  h.emit('input', { type: 'input', source: 'interactive', text, streamingBehavior: streaming })
+const turn = (h, text, { streaming } = {}) => { h.prompt = text; return h.emit('input', { type: 'input', source: 'interactive', text, streamingBehavior: streaming }) }
 
 const settle = (h, { outcome = 'completed' } = {}) =>
-  h.emit('agent_before_settle', { type: 'agent_before_settle', entries: [], continue: false, outcome })
+  h.emit('agent_before_settle', { type: 'agent_before_settle', entries: [], continue: false, outcome,
+    context: { llmMessages: [{ role: 'user', content: h.prompt, timestamp: Date.now() },
+      { role: 'assistant', content: [{ type: 'text', text: 'Normal answer preserved' }], timestamp: Date.now() }] } })
+const flush = async () => { for (let i=0;i<12;i++) await new Promise(resolve => setImmediate(resolve)) }
 
 async function project(h, text, timestamp = Date.now()) {
   const history = [{ role: 'user', content: [{ type: 'text', text }], timestamp }]
@@ -232,206 +238,96 @@ let groups = 0
   groups++
 }
 
-// --- Wrap-up gating -------------------------------------------------------
-
-// Stale store: one nudge per run, no --force guidance, aligned with the RULES policy.
+// --- Real lifecycle: settle -> continuation -> agent_start -> settle -> settled.
 {
   resetCalls()
   const h = await readyHarness()
-  await h.emit('agent_start', { type: 'agent_start' })
-  const result = await settle(h)
-  assert.ok(result, 'wrap-up nudge fires on a stale store')
-  assert.equal(result.continue, true)
-  assert.equal(result.entries.length, 1)
-  const entry = result.entries[0]
-  assert.equal(entry.type, 'custom_message')
-  assert.equal(entry.display, false)
-  assert.match(entry.content, /wrap-up check, once/)
-  assert.doesNotMatch(entry.content, /--force/)
-  assert.match(entry.content, /--client-only remember/)
-  assert.match(entry.content, /same-subject/)
-  assert.match(entry.content, /update, merge, or attach/)
-  assert.match(entry.content, /--parent/)
-  assert.match(RULES, /Never use --force to bypass dedup/)
-  assert.equal(calls.find(call => call.args[0] === 'status').executable, 'rsrs')
-  groups++
-}
-
-// Same run never nudges twice; the next agent_start re-arms the check.
-{
-  resetCalls()
-  const h = await readyHarness()
-  await h.emit('agent_start', { type: 'agent_start' })
-  assert.ok(await settle(h))
+  let modelCalls = 0
+  h.ctx.modelRegistry.complete = async () => { modelCalls++; return { content: [{ type: 'text', text: '{"facts":[]}' }], stopReason: 'stop' } }
   assert.equal(await settle(h), undefined)
+  await h.emit('agent_start', {})
+  assert.equal(await settle(h), undefined)
+  await h.emit('agent_settled', { aborted: false })
+  await flush()
+  for (let i=0;i<12;i++) { await h.emit('agent_start', {}); await settle(h); await h.emit('agent_settled', { aborted: false }) }
+  await flush()
+  assert.equal(modelCalls, 1)
   assert.equal(listCalls().length, 1)
-  await h.emit('agent_start', { type: 'agent_start' })
-  assert.ok(await settle(h))
-  assert.equal(listCalls().length, 2)
+  assert.equal(calls.filter(c => c.args[0] === 'remember').length, 0)
+  assert.deepEqual(h.sent, [])
+  assert.deepEqual(h.notifications, [])
+  await turn(h, 'second real input')
+  await h.emit('agent_start', {})
+  await settle(h); await h.emit('agent_settled', { aborted: false }); await flush()
+  assert.equal(modelCalls, 2)
   groups++
 }
 
-// Fresh store (engine reported a recent write): no nudge.
-{
+// Fresh store, explicit store (including pending), and unsuccessful runs never run a worker.
+for (const kind of ['fresh','explicit','pending','aborted','error']) {
   resetCalls()
-  const h = await readyHarness({ fresh: true })
-  await h.emit('agent_start', { type: 'agent_start' })
-  assert.equal(await settle(h), undefined)
-  groups++
-}
-
-// Explicit store mid-run (steering input) sets the run flag: no nudge despite a stale store.
-{
-  resetCalls()
-  const h = await readyHarness()
-  await h.emit('agent_start', { type: 'agent_start' })
-  control.impl = args => args[0] === 'remember' ? storeOk() : wrapUpImpl()(args)
-  await turn(h, '记： mid-run fact', { streaming: 'steer' })
-  assert.equal(await settle(h), undefined)
-  groups++
-}
-
-// Idle explicit store before the run: the engine's fresh write suppresses the nudge.
-{
-  resetCalls()
-  const h = harness()
-  control.impl = args => {
-    if (args[0] === 'status') return healthyStatus()
-    if (args[0] === 'remember') return storeOk()
-    if (args[0] === 'list') return { status: 'ok', details: [{ id: 'fresh', updated_at: new Date().toISOString() }] }
-    return { status: 'skip' }
+  const h = await readyHarness({ fresh: kind === 'fresh' })
+  let models = 0
+  h.ctx.modelRegistry.complete = async () => { models++; throw Error('must not call') }
+  if (kind === 'explicit' || kind === 'pending') {
+    control.impl = args => args[0] === 'remember' ? (kind === 'explicit' ? storeOk() : { status: 'pending' }) : wrapUpImpl()(args)
+    await turn(h, '记： confirmed fact', { streaming: 'steer' })
   }
-  await turn(h, '记住： explicit fact before the run')
-  await h.emit('agent_start', { type: 'agent_start' })
-  assert.equal(await settle(h), undefined)
+  await settle(h, { outcome: kind === 'aborted' || kind === 'error' ? kind : 'completed' })
+  await h.emit('agent_settled', { aborted: kind === 'aborted' }); await flush()
+  assert.equal(models, 0)
+  if (kind === 'pending') assert.match((await project(h, h.prompt)).messages[1].content, /store pending/)
   groups++
 }
 
-// Aborted run: no nudge and no engine query.
+// Detached worker: an uncooperative provider never keeps the host handler pending.
+// Real new inputs, queued followUp/steer, reload, switch and shutdown cancel it.
+for (const next of ['input','steer','followUp','session_start','session_switch','session_shutdown']) {
+  resetCalls()
+  const h = await readyHarness({ flags: { 'respire-rsrs': '/fixture/rsrs' } })
+  let options, complete
+  h.ctx.modelRegistry.complete = (_model, _context, opts) => { options = opts; return new Promise(resolve => { complete=resolve }) }
+  await settle(h)
+  await Promise.race([h.emit('agent_settled', { aborted: false }), new Promise((_, reject) => setTimeout(() => reject(Error('host blocked')), 100))])
+  await flush(); assert.ok(options)
+  if (['input','steer','followUp'].includes(next)) await turn(h, 'next real input', { streaming: next === 'input' ? undefined : next })
+  else await h.emit(next, {})
+  assert.equal(options.signal.aborted, true)
+  complete({ content: [{ type: 'toolCall', id: 'late', name: 'respire_memory', arguments: { command: 'remember', text: 'must not write', title: 'late' } }], stopReason: 'toolUse' })
+  await flush()
+  assert.equal(calls.filter(c => c.args[0] === 'remember').length, 0)
+  assert.equal(h.notifications.length, 0)
+  groups++
+}
+
+// A new queued request arriving between the two boundaries cannot consume the
+// new request's budget or launch an old request with new model/cwd/flags.
 {
   resetCalls()
   const h = await readyHarness()
-  await h.emit('agent_start', { type: 'agent_start' })
-  assert.equal(await settle(h, { outcome: 'aborted' }), undefined)
-  assert.equal(listCalls().length, 0)
+  let count = 0
+  h.ctx.modelRegistry.complete = async () => { count++; return { content: [{ type: 'text', text: '{"facts":[]}' }], stopReason: 'stop' } }
+  await settle(h)
+  await turn(h, 'queued new request', { streaming: 'followUp' })
+  await h.emit('agent_settled', { aborted: false }); await flush()
+  assert.equal(count, 0)
+  await settle(h); await h.emit('agent_settled', { aborted: false }); await flush()
+  assert.equal(count, 1)
   groups++
 }
 
-// Session switch disarms everything; the probe re-arms on the next session's input.
+// Background failure surfaces a fixed warning, also in non-TUI, without another turn.
 {
   resetCalls()
-  const h = await readyHarness()
-  await h.emit('session_switch', { type: 'session_switch' })
-  assert.equal(await settle(h), undefined)
-  assert.equal(listCalls().length, 0)
-  await turn(h, 'new session question')
-  assert.equal(statusCalls().length, 2)
+  const h = await readyHarness({ hasUI: false })
+  h.ctx.modelRegistry.complete = async () => { throw Error('raw private provider error') }
+  await settle(h); await h.emit('agent_settled', { aborted: false }); await flush()
+  assert.equal(h.sent.length, 1)
+  assert.equal(h.sent[0][1].triggerTurn, false)
+  assert.doesNotMatch(h.sent[0][0].content, /raw private/)
+  await h.emit('agent_start', {}); await settle(h); await h.emit('agent_settled', { aborted: false }); await flush()
+  assert.equal(h.sent.length, 1)
   groups++
 }
 
-// Failed list query: silent now, latch stays armed, a later round nudges.
-{
-  resetCalls()
-  const h = await readyHarness()
-  await h.emit('agent_start', { type: 'agent_start' })
-  control.impl = args => args[0] === 'list' ? Promise.reject(new Error('boom')) : wrapUpImpl()(args)
-  assert.equal(await settle(h), undefined)
-  control.impl = wrapUpImpl()
-  assert.ok(await settle(h))
-  assert.equal(listCalls().length, 2)
-  groups++
-}
-
-// Cancelled list query: silent, no nudge.
-{
-  resetCalls()
-  const h = await readyHarness()
-  const ac = new AbortController()
-  h.ctx.signal = ac.signal
-  await h.emit('agent_start', { type: 'agent_start' })
-  control.impl = (args, options) => {
-    if (args[0] === 'list') {
-      return new Promise((_, reject) => {
-        options.signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true })
-        if (options.signal?.aborted) reject(new Error('cancelled'))
-      })
-    }
-    return wrapUpImpl()(args)
-  }
-  const running = settle(h)
-  ac.abort()
-  assert.equal(await running, undefined)
-  groups++
-}
-
-// List response validity gates the nudge: only status ok with a details array is evidence;
-// the freshness window itself is unchanged (stale records still allow a nudge).
-{
-  resetCalls()
-  const h = await readyHarness()
-  await h.emit('agent_start', { type: 'agent_start' })
-  const listImpl = doc => args => args[0] === 'list' ? doc : wrapUpImpl()(args)
-  // unusable responses never nudge, and the latch stays armed for a later round
-  control.impl = listImpl({ status: 'skip' })
-  assert.equal(await settle(h), undefined)
-  control.impl = listImpl({ status: 'paused' })
-  assert.equal(await settle(h), undefined)
-  control.impl = listImpl({ status: 'ok', summary: {} })
-  assert.equal(await settle(h), undefined)
-  control.impl = listImpl({ status: 'ok', details: 'not-an-array' })
-  assert.equal(await settle(h), undefined)
-  assert.equal(listCalls().length, 4)
-  // verifiably empty store: the only null case, and it nudges
-  control.impl = listImpl({ status: 'ok', details: [] })
-  assert.ok(await settle(h))
-  await h.emit('agent_start', { type: 'agent_start' })
-  // usable stale record: freshness window unchanged, still nudges
-  control.impl = listImpl({ status: 'ok', details: [{ id: 'old', updated_at: '2020-01-01T00:00:00.000Z' }] })
-  assert.ok(await settle(h))
-  assert.equal(listCalls().length, 6)
-  groups++
-}
-
-// Undeterminable freshness inside details is no evidence either: any invalid entry,
-// unparsable timestamp, or a valid-stale record mixed with an invalid one keeps the
-// check silent — such responses cannot prove the store empty or the records expired.
-{
-  resetCalls()
-  const h = await readyHarness()
-  await h.emit('agent_start', { type: 'agent_start' })
-  const listImpl = doc => args => args[0] === 'list' ? doc : wrapUpImpl()(args)
-  control.impl = listImpl({ status: 'ok', details: [{ id: 'record', updated_at: 'invalid' }] })
-  assert.equal(await settle(h), undefined)
-  control.impl = listImpl({ status: 'ok', details: [{}] })
-  assert.equal(await settle(h), undefined)
-  control.impl = listImpl({ status: 'ok', details: [null] })
-  assert.equal(await settle(h), undefined)
-  // valid stale record + undeterminable record: never passes on the stale best alone
-  control.impl = listImpl({ status: 'ok', details: [{ id: 'old', updated_at: '2020-01-01T00:00:00.000Z' }, { id: 'unknown' }] })
-  assert.equal(await settle(h), undefined)
-  assert.equal(listCalls().length, 4) // the latch stays armed through no-evidence settles
-  groups++
-}
-
-// --- Run-context plumbing -------------------------------------------------
-
-// Every engine call carries the configured executable, the run cwd and an abort-combined signal.
-{
-  resetCalls()
-  const h = await readyHarness({ flags: { 'respire-rsrs': '/custom/rsrs-driver' } })
-  assert.equal(h.ctx.cwd, '/proj/work')
-  await h.emit('agent_start', { type: 'agent_start' })
-  assert.ok(await settle(h))
-  assert.ok(calls.length >= 3)
-  for (const call of calls) {
-    assert.equal(call.executable, '/custom/rsrs-driver')
-    assert.equal(call.cwd, '/proj/work')
-    assert.ok(call.signal instanceof AbortSignal)
-  }
-  assert.equal(statusCalls()[0].args.join(' '), 'status')
-  assert.match(calls.find(call => call.args[0] === 'recall').args.join(' '), /^recall /)
-  assert.equal(listCalls()[0].args.join(' '), 'list --limit 3')
-  groups++
-}
-
-console.log(`Behavior check: ${groups} scenario groups green (probe states, wrap-up gating, run-context plumbing)`)
+console.log(`Behavior check: ${groups} scenario groups green (probe, real lifecycle, cancellation, UI isolation)`)
