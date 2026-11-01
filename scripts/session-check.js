@@ -28,33 +28,32 @@ let count=0
 
 async function fixture(mode) {
   const dir=mkdtempSync(join(home,'case-'));const agentDir=join(dir,'agent');mkdirSync(agentDir)
-  const file=join(dir,'cli-state.json');writeFileSync(file,JSON.stringify({calls:[],writes:[],mode}))
+  const file=join(dir,'cli-state.json');writeFileSync(file,JSON.stringify({calls:[],writes:[],oldContent:'Windows and Linux release checks are required.',mode}))
   const script=join(dir,'rsrs.mjs')
-  writeFileSync(script,`import {readFileSync,writeFileSync} from 'node:fs';
-const file=${JSON.stringify(file)}, id=${JSON.stringify(parent)}, args=process.argv.slice(2);
+  writeFileSync(script,`import {readFileSync,writeFileSync,renameSync} from 'node:fs';
+const file=${JSON.stringify(file)}, id=${JSON.stringify(parent)}, saved='bcdef123-1111-2222-3333-444455556666', args=process.argv.slice(2);
 if(args.shift()!=='--client-only'||args.pop()!=='--json')throw Error('client-only/json required');
-const s=JSON.parse(readFileSync(file));s.calls.push(args);writeFileSync(file,JSON.stringify(s));
+const save=s=>{const temporary=file+'.'+process.pid+'.tmp';writeFileSync(temporary,JSON.stringify(s));renameSync(temporary,file)};
+const s=JSON.parse(readFileSync(file));s.calls.push(args);save(s);
 const command=args[0];let doc;
 if(command==='status')doc={status:'ok',summary:{session:{has_session:true},local_alive:30,unlocked:true}};
 else if(command==='list')doc={status:'ok',details:[]};
 else if(command==='prompt')doc={status:'ok',summary:{instructions:'Read candidates and use a parent; never force.'}};
 else if(command==='recall'){if(args.length!==5||args[2]!=='--limit'||args[3]!=='5'||args[4]!=='--titles')throw Error('invalid recall');doc={status:'ok',details:[{id,title:'Existing release policy',score:0.8}]}};
-if(command==='show'){if(args.length!==2||args[1]!==id)throw Error('invalid show');doc={status:'ok',summary:{id},details:{entry:s.writes.at(-1)??{content:'Existing release policy',title:'Existing release policy'}}}};
-if(command==='update'){
- if(args.length!==6||args[1]!==id||args[2]!=='--content'||args[4]!=='--title')throw Error('CLI update requires id --content text --title title');
- s.writes.push({content:args[3],title:args[5]});writeFileSync(file,JSON.stringify(s));doc={status:'ok',summary:{id}};
-}
+if(command==='show'){if(args.length!==2||![id,saved].includes(args[1]))throw Error('invalid show');doc={status:'ok',summary:{id:args[1]},details:{entry:args[1]===id?{content:s.oldContent,title:'Existing release policy'}:s.writes.at(-1)}}};
 if(command==='remember'){
  if(args.length!==8||args[2]!=='--title'||args[4]!=='--importance'||args[5]!=='important'||args[6]!=='--parent'||args[7]!==id)throw Error('invalid remember');
- if(['cancel','switch','reload'].includes(s.mode)){s.writeStarted=true;writeFileSync(file,JSON.stringify(s));await new Promise(r=>setTimeout(r,10000));}
- s.writes.push({content:args[1],title:args[3]});writeFileSync(file,JSON.stringify(s));doc={status:'ok',summary:{id}};
+ if(['cancel','switch','reload'].includes(s.mode)){s.writeStarted=true;save(s);await new Promise(r=>setTimeout(r,10000));}
+ if(s.mode==='preserve-existing')doc={status:'pending',items:[]};
+ else{s.writes.push({content:args[1],title:args[3]});save(s);doc={status:'ok',summary:{id:saved}}};
 }
 if(!doc)throw Error('unsupported command');console.log(JSON.stringify(doc));`)
+  execFileSync(process.execPath,['--check',script],{stdio:'pipe'})
   let executable
   if(process.platform==='win32'){executable=join(dir,'rsrs.cmd');writeFileSync(executable,`@echo off\r\n"${process.execPath}" "${script}" %*\r\n`)}
   else{executable=join(dir,'rsrs');writeFileSync(executable,`#!${process.execPath}\n`+readFileSync(script,'utf8'),{mode:0o700})}
   const state=()=>JSON.parse(readFileSync(file,'utf8'))
-  const faux=fauxProvider({models:[{id:'fixture-model',contextWindow:32000,maxTokens:4096}]})
+  const faux=fauxProvider({models:[{id:'fixture-model',reasoning:true,contextWindow:32000,maxTokens:4096}]})
   const runtime=await ModelRuntime.create({credentials:new InMemoryCredentialStore(),modelsStore:new InMemoryModelsStore(),modelsPath:null,allowModelNetwork:false,refreshOnCreate:false})
   runtime.registerNativeProvider(faux.provider)
   const settings=SettingsManager.inMemory({compaction:{enabled:false},retry:{enabled:false}})
@@ -76,14 +75,14 @@ if(!doc)throw Error('unsupported command');console.log(JSON.stringify(doc));`)
     if(serialized.includes('Extract at most one confirmed')){
       background++
       if(mode==='failure')throw Error('synthetic provider failed')
-      const facts=['write','update','cancel','switch','reload'].includes(mode)?[{text:fact,title:fact,status:'confirmed',sources:[{index:0,quote:fact}]}]:[]
-      return fauxAssistantMessage(JSON.stringify({facts}))
+      const facts=['write','preserve-existing','cancel','switch','reload'].includes(mode)?[{text:fact,title:fact,status:'confirmed',sources:[{index:0,quote:fact}]}]:[]
+      return fauxAssistantMessage([{type:'thinking',thinking:'PRIVATE_BACKGROUND_REASONING'},{type:'text',text:JSON.stringify({facts})}])
     }
     if(serialized.includes('isolated memory worker')){
       background++
       const steps=[[fauxToolCall('respire_memory',{command:'prompt'}),fauxToolCall('respire_memory',{command:'recall',text:'release'})],
         [fauxToolCall('respire_memory',{command:'show',id:parent})],
-        [fauxToolCall('respire_memory',{command:mode==='update'?'update':'remember',text:fact,title:fact,...(mode==='update'?{id:parent}:{parent})})]]
+        [fauxToolCall('respire_memory',{command:'remember',text:fact,title:fact,parent})]]
       return fauxAssistantMessage(steps[stage++],{stopReason:'toolUse'})
     }
     main++
@@ -96,7 +95,7 @@ if(!doc)throw Error('unsupported command');console.log(JSON.stringify(doc));`)
   return {session,owner,state,manager,observed,main:()=>main,background:()=>background,held:()=>holdMain,release:()=>mainRelease(),cleanup:async()=>{await owner.session.abort();await owner.session.extensionRunner.emit({type:'session_shutdown'});owner.session.dispose()}}
 }
 
-for(const mode of ['none','write','update','failure','queue','cancel','switch','reload','main-error','main-abort']){
+for(const mode of ['none','write','preserve-existing','failure','queue','cancel','switch','reload','main-error','main-abort']){
  const h=await fixture(mode)
  try{
   const running=h.session.prompt(fact)
@@ -106,8 +105,8 @@ for(const mode of ['none','write','update','failure','queue','cancel','switch','
   if(mode==='main-abort'){await until(h.held);await h.session.abort()}
   await running
   assert.equal(h.session.isIdle,true,'main session must settle without awaiting worker')
-  if(mode==='write'||mode==='update')await until(()=>h.state().calls.filter(c=>c[0]==='show').length===2)
-  else if(mode==='failure')await until(()=>h.session.messages.some(m=>m.role==='custom'&&m.customType==='respire-status'))
+  if(mode==='write')await until(()=>h.state().calls.filter(c=>c[0]==='show').length===2)
+  else if(mode==='failure'||mode==='preserve-existing')await until(()=>h.session.messages.some(m=>m.role==='custom'&&m.customType==='respire-status'))
   else if(['cancel','switch','reload'].includes(mode)){
    await until(()=>h.state().writeStarted)
    if(mode==='switch') {
@@ -126,10 +125,13 @@ for(const mode of ['none','write','update','failure','queue','cancel','switch','
   assert.equal(assistant.length,h.main());if(['main-error','main-abort'].includes(mode))assert.ok(assistant.some(m=>['error','aborted'].includes(m.stopReason)))
   else assert.ok(assistant.every(m=>JSON.stringify(m.content).includes('Normal user answer.')))
   assert.equal(h.observed.filter(e=>e.type==='agent_settled').length,mode==='queue'?1:h.main())
+  assert.ok(!JSON.stringify(h.session.messages).includes('PRIVATE_BACKGROUND_REASONING'),'background thinking must never enter UI/history')
   assert.ok(!h.session.messages.some(m=>m.customType==='respire-context'),'request/worker context must not enter history')
-  if(['none','write','update','queue'].includes(mode))assert.ok(!h.session.messages.some(m=>m.role==='custom'),'ordinary worker content must not enter history')
-  if(mode==='write'||mode==='update'){assert.deepEqual(h.state().writes,[{content:fact,title:fact}]);assert.equal(h.background(),4)}
-  if(mode==='none'||mode==='queue')assert.equal(h.state().writes.length,0)
+  if(['none','write','queue'].includes(mode))assert.ok(!h.session.messages.some(m=>m.role==='custom'),'ordinary worker content must not enter history')
+  if(mode==='write'){assert.deepEqual(h.state().writes,[{content:fact,title:fact}]);assert.equal(h.background(),4)}
+  assert.equal(h.state().oldContent,'Windows and Linux release checks are required.','existing content must remain unchanged')
+  if(['none','queue','preserve-existing'].includes(mode))assert.equal(h.state().writes.length,0)
+  if(mode==='preserve-existing')assert.ok(h.session.messages.some(m=>m.role==='custom'&&m.content.includes('pending')))
   count++
  }finally{await h.cleanup()}
 }

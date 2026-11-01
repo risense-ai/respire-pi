@@ -39,7 +39,7 @@ async function fixture({ responses = flow(), runImpl, completeImpl, timeoutMs = 
 
 // A real write is deduplicated, parented (or updates an observed candidate), read back,
 // and cannot produce an ordinary chat/history message: the worker has no such API.
-for (const command of ['remember', 'update']) {
+for (const command of ['remember']) {
   const r = await fixture({ responses: flow(command) })
   assert.deepEqual(r.reports, [])
   assert.deepEqual(r.calls.map(c => c[0]), ['list','prompt','recall','show',command,'show'])
@@ -119,6 +119,23 @@ for (const [observation, candidate, role] of [
   await wrapUp({ model: {}, registry: { complete: async () => extract({ facts: [candidateFact] }) }, transcript: input,
     controller: new AbortController(), run: async args => { writes.push(args); return { status: 'ok', details: [] } }, report: m => reports.push(m) })
   assert.equal(reports.length, 1); assert.deepEqual(writes, [['list', '--limit', '3']]); tests++
+}
+
+// Reasoning model thinking blocks are ignored, never copied to status/history.
+{
+  const extraction=extract({facts:[]});extraction.content.unshift({type:'thinking',thinking:'private hidden reasoning'})
+  const r=await fixture({responses:[extraction]});assert.deepEqual(r.reports,[]);tests++
+}
+{
+  const finish=extract({result:'nothing-to-store',ids:[]});finish.content.unshift({type:'thinking',thinking:'private hidden reasoning'})
+  const r=await fixture({responses:[extract({facts:[fact]}),finish]});assert.deepEqual(r.reports,[]);tests++
+}
+// Existing bodies cannot be replaced by a single extracted fact.
+{
+  const responses=flow('update')
+  const r=await fixture({responses})
+  assert.equal(r.calls.filter(c=>['remember','update'].includes(c[0])).length,0)
+  assert.equal(r.reports.length,1);tests++
 }
 
 // Positional arguments cannot become CLI flags; schema cannot open a shell path.

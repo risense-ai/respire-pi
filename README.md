@@ -137,7 +137,8 @@ one-fact extraction must preserve complete observed lines verbatim (including ne
 with a deterministic title. Proposals/questions and unsupported assistant assertions
 are rejected; a quote substring alone is not proof of a confirmed fact. Policy reads,
 same-subject recall and candidate-body reads precede writing; important new facts
-need a shown parent, existing facts can update a shown ID, and confirmed writes
+need a shown parent. The background worker cannot update/replace existing content;
+same-subject conflicts use engine deduplication/pending for user review. Confirmed writes
 are read back. No shell, force, deletion, runtime, account or configuration tools
 are available. Empty facts produce no write and no visible reply. Pending, failed
 or unconfirmed work produces only a short fixed warning (TUI notification or a
@@ -145,7 +146,7 @@ non-triggering status message outside TUI), never raw diagnostics or model prose
 Unknown writes are never retried automatically.
 
 Tests use synthetic requests, models and memory stubs. Real AgentSession tests with synthetic providers and strict local CLI fixtures cover idle,
-write/update with content readback, background and main failures, queued input, cancellation,
+write/content readback and preservation of existing records, background and main failures, queued input, cancellation,
 reload and real session replacement. These
 Pi 1.3.0/1.4.0 tests do not prove a real Windows GUI/provider/database end-to-end
 run. Provider cancellation remains subject to the provider honoring its signal;
