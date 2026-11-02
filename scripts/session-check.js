@@ -27,6 +27,7 @@ const until=async predicate=>{const end=Date.now()+20000;while(!predicate()){ass
 let count=0
 
 async function fixture(mode) {
+  const bodies=[]
   const dir=mkdtempSync(join(home,'case-'));const agentDir=join(dir,'agent');mkdirSync(agentDir)
   const file=join(dir,'cli-state.json');writeFileSync(file,JSON.stringify({calls:[],writes:[],oldContent:'Windows and Linux release checks are required.',mode}))
   const script=join(dir,'rsrs.mjs')
@@ -59,9 +60,23 @@ if(!doc)throw Error('unsupported command');console.log(JSON.stringify(doc));`)
   const settings=SettingsManager.inMemory({compaction:{enabled:false},retry:{enabled:false}})
   const build=async (manager, sessionStartEvent) => {
     const loader=new DefaultResourceLoader({cwd:dir,agentDir,settingsManager:settings,noExtensions:true,noSkills:true,noPromptTemplates:true,noThemes:true,noContextFiles:true,
-      extensionFactories:[pi=>respire(new Proxy(pi,{get(target,key){return key==='getFlag'?name=>name==='respire-rsrs'?executable:target.getFlag(name):Reflect.get(target,key)}}))]})
+      extensionFactories:[pi=>{
+        respire(new Proxy(pi,{get(target,key){return key==='getFlag'?name=>name==='respire-rsrs'?executable:target.getFlag(name):Reflect.get(target,key)}}))
+        if(mode==='front-guard'||mode==='nested-guard'){
+          pi.registerTool({name:'bash',label:'Synthetic shell',description:'Synthetic shell body must never run.',
+            parameters:{type:'object',properties:{command:{type:'string'}},required:['command']},
+            execute:async()=>{bodies.push('bash');return {content:[{type:'text',text:'unexpected dispatch'}]}}})
+          pi.registerTool({name:'orchestrate',label:'Synthetic nested caller',description:'Call the synthetic shell through the host.',
+            parameters:{type:'object',properties:{}},
+            execute:async(_id,_args,signal,_update,ctx)=>{
+              bodies.push('orchestrate')
+              const outcome=await ctx.executeTool('bash',{command:'rsrs remember fact --importance important'},{signal})
+              return {...outcome.result,isError:outcome.isError}
+            }})
+        }
+      }]})
     await loader.reload()
-    const result=await createAgentSession({cwd:dir,agentDir,modelRuntime:runtime,model:faux.getModel(),settingsManager:settings,sessionManager:manager,resourceLoader:loader,tools:[],noTools:'all',sessionStartEvent})
+    const result=await createAgentSession({cwd:dir,agentDir,modelRuntime:runtime,model:faux.getModel(),settingsManager:settings,sessionManager:manager,resourceLoader:loader,tools:mode.endsWith('guard')?['bash','orchestrate']:[],noTools:'all',sessionStartEvent})
     await result.session.bindExtensions({mode:'print',onError:error=>{throw Error(JSON.stringify(error))}})
     return {...result,services:{cwd:dir,agentDir,modelRuntime:runtime,settingsManager:settings,resourceLoader:loader,diagnostics:[]},diagnostics:[]}
   }
@@ -86,14 +101,31 @@ if(!doc)throw Error('unsupported command');console.log(JSON.stringify(doc));`)
       return fauxAssistantMessage(steps[stage++],{stopReason:'toolUse'})
     }
     main++
+    if((mode==='front-guard'||mode==='nested-guard')&&main===1)return fauxAssistantMessage([
+      fauxToolCall(mode==='front-guard'?'bash':'orchestrate',mode==='front-guard'?{command:'rsrs remember fact --importance important'}:{})
+    ],{stopReason:'toolUse'})
     if(mode==='main-error')return fauxAssistantMessage('',{stopReason:'error',errorMessage:'synthetic main failure'})
     if(mode==='main-abort')await new Promise((_,reject)=>{holdMain=true;options.signal.addEventListener('abort',()=>reject(Error('synthetic cancellation')),{once:true})})
     if(mode==='queue'&&main===1)await new Promise(resolve=>{mainRelease=resolve;holdMain=true})
     return fauxAssistantMessage('Normal user answer.')
   }
   faux.setResponses(Array.from({length:30},()=>response))
-  return {session,owner,state,manager,observed,main:()=>main,background:()=>background,held:()=>holdMain,release:()=>mainRelease(),cleanup:async()=>{await owner.session.abort();await owner.session.extensionRunner.emit({type:'session_shutdown'});owner.session.dispose()}}
+  return {session,owner,state,manager,observed,bodies,main:()=>main,background:()=>background,held:()=>holdMain,release:()=>mainRelease(),cleanup:async()=>{await owner.session.abort();await owner.session.extensionRunner.emit({type:'session_shutdown'});owner.session.dispose()}}
 }
+
+for(const mode of ['front-guard','nested-guard']){
+ const h=await fixture(mode)
+ try{
+  await h.session.prompt('/nomem '+fact)
+  assert.deepEqual(h.bodies,mode==='front-guard'?[]:['orchestrate'],'blocked shell body must not dispatch')
+  assert.equal(h.state().calls.length,0,'missing parent requires no engine query')
+  assert.ok(h.session.messages.some(message=>message.role==='toolResult'&&message.isError&&JSON.stringify(message.content).includes('blocked this tool call before execution')))
+  assert.equal(h.main(),2)
+  assert.equal(h.background(),0)
+  count++
+ }catch(error){console.error('Session fixture failed:',mode,JSON.stringify(h.state()),JSON.stringify(h.session.messages.filter(message=>message.role==='toolResult')));throw error}finally{await h.cleanup()}
+}
+console.log('Real front guard: direct and nested shell bodies blocked')
 
 for(const mode of ['none','write','preserve-existing','failure','queue','cancel','switch','reload','main-error','main-abort']){
  const h=await fixture(mode)
@@ -133,6 +165,6 @@ for(const mode of ['none','write','preserve-existing','failure','queue','cancel'
   if(['none','queue','preserve-existing'].includes(mode))assert.equal(h.state().writes.length,0)
   if(mode==='preserve-existing')assert.ok(h.session.messages.some(m=>m.role==='custom'&&m.content.includes('pending')))
   count++
- }finally{await h.cleanup()}
+ }catch(error){console.error('Session fixture failed:',mode,JSON.stringify(h.state()),JSON.stringify(h.session.messages.filter(message=>message.role==='toolResult')));throw error}finally{await h.cleanup()}
 }
 console.log(`Real AgentSession check: ${count} isolated provider/CLI scenarios green`)
