@@ -83,6 +83,125 @@ async function readyHarness(opts) {
 
 let groups = 0
 
+// Model and nested shell calls reach the same host tool_call gate before dispatch.
+{
+  resetCalls()
+  const h = harness(), parent = 'abcdef01-0000-4000-8000-000000000000'
+  const tool = (toolName, command) => h.emit('tool_call', { toolName, input: command && typeof command === 'object' ? command : { command } })
+  const unsafe = [
+    'rsrs remember fact --importance important',
+    "bash -c 'rsrs remember fact --importance important --force'",
+    "bash -lic 'rsrs remember fact --importance important --force'",
+    "pwsh -NoProfile -ExecutionPolicy Bypass -Command 'rsrs remember fact --importance important --force'",
+    'pwsh -Command rsrs remember fact --importance important --force',
+    `bash -c 'rsrs remember fact --importance important --parent ${parent}'`,
+    `rsrs recall "$(rsrs remember fact --importance important --parent ${parent})"`,
+
+    "pwsh -Command 'rsrs remember fact --importance important --force'",
+    "powershell.exe -Command 'rsrs remember fact --importance important --force'",
+    'RSRS_CLIENT_ONLY=1 rsrs remember fact --importance important --force',
+    'echo "$(rsrs remember fact --importance important --force)"',
+    'rsrs recall "$(rsrs remember fact --importance important --force)"',
+    'echo "$(echo "$(rsrs remember fact --importance important --force)")"',
+    "echo ok\nrsrs remember fact --importance important --force",
+
+    `rsrs >out remember fact --importance important --force`,
+    `rsrs --json 2>out remember fact --importance important --force`,
+    `2>/dev/null rsrs remember fact --importance important --force`,
+    `2>&1 rsrs remember fact --importance important --force`,
+    `rsrs 2>&1 remember fact --importance important --force`,
+    `rsrs remember fact --merge-ids ${parent} --importance trivial`,
+    `rsrs remember 'fact --parent ${parent}' --importance important`,
+    'rsrs remember fact --importance important --parent ""',
+    `rsrs remember fact --importance important --force --parent ${parent}`,
+    `rsrs update ${parent} --parent ""`,
+    `rsrs update ${parent} --clear-parent`,
+    `rsrs update ${parent} --parent none`,
+    'rsrs remember fact --importance important --parent $PARENT',
+    `rsrs remember fact --importance important # --parent ${parent}`,
+    `rsrs remember fact --importance important --parent ${parent}; echo done`,
+    `rsrs --config missing remember fact --importance important --parent ${parent}`,
+    `>out rsrs remember fact --importance important --parent ${parent}`,
+    `2>out rsrs remember fact --importance important --parent ${parent}`,
+    `echo $(rsrs remember fact --importance important --parent ${parent})`,
+    `npx rsrs remember fact --importance important --parent ${parent}`,
+    `rsrs remember @'\nfact\n'@ --importance important --parent ${parent}`,
+  ]
+  for (const name of ['bash', 'powershell']) {
+    for (const command of unsafe) assert.equal((await tool(name, command)).block, true, command)
+  }
+  assert.equal((await tool('bash', 'echo `rsrs remember fact --importance important --force`')).block, true)
+  assert.equal((await tool('powershell', String.raw`echo "\$(rsrs remember fact --importance important --force)"`)).block, true)
+  for (const name of ['memory_remember', 'memory_update', 'mcp__renamed__memory_remember', 'mcp__other__memory_update']) {
+    const denied = await tool(name, { content: 'fact', importance: 'trivial', parent })
+    assert.equal(denied.block, true)
+    assert.match(denied.reason, /target library cannot be verified/)
+  }
+  assert.equal(calls.length, 0, 'unsafe parameters are blocked before any engine call')
+  control.impl = args => {
+    assert.deepEqual(args, ['show', parent])
+    return { status: 'ok', summary: { id: parent }, details: { entry: { id: parent, content: 'Existing parent' } } }
+  }
+  for (const name of ['bash', 'powershell']) {
+    assert.equal(await tool(name, `rsrs --client-only remember 'fact' --importance=important --parent='${parent}' --project project --tags tags --type context --summary summary --clear-review-at`), undefined)
+  }
+  for (const prefix of ['C:\\tools\\rsrs.exe', '& "C:\\Program Files\\rsrs.cmd"']) {
+    assert.equal(await tool('powershell', `${prefix} remember fact --importance important --parent ${parent}`), undefined)
+  }
+  assert.equal(calls.length, 4)
+  assert.ok(calls.every(call => call.signal && !call.signal.aborted))
+  for (const command of ['rsrs show abcdef01 --json', 'rsrs recall remember --titles --json', 'rsrs >out recall remember --titles', '2>/dev/null rsrs recall remember --titles', 'rsrs recall rsrs --project remember', 'echo rsrs remember --importance important', 'rsrs --json --client-only recall remember --titles', 'rsrs --model-task-id remember --json --client-only recall remember', 'echo \'rsrs remember fact --importance important\'', 'echo ordinary', "bash -c 'rsrs recall remember --titles'", "pwsh -NoProfile -Command 'rsrs recall remember --titles'", 'echo "rsrs remember fact --importance important --force"', "echo '$(rsrs remember fact --importance important --force)'", "rsrs recall 'rsrs remember fact --importance important --force'", "rsrs recall 'bash -c rsrs remember fact'", "bash -c 'echo rsrs remember fact'", 'RSRS_CLIENT_ONLY=1 rsrs recall remember --titles',  `rsrs update ${parent} --content 'fact'`, 'rsrs remember diary --importance trivial']) {
+    assert.equal(await tool('bash', command), undefined)
+  }
+  assert.equal(await tool('other_tool', unsafe[0]), undefined)
+  assert.equal(await tool('powershell', 'echo `rsrs remember fact --importance important --force`'), undefined)
+  assert.equal(await tool('bash', String.raw`echo "\$(rsrs remember fact --importance important --force)"`), undefined)
+  for (const name of ['memory_recall', 'mcp__other__memory_show', 'mcp__other__unrelated', 'memory_remember_extra']) {
+    assert.equal(await tool(name, { query: 'remember' }), undefined)
+  }
+  assert.equal(calls.length, 4, 'reads and unrelated tools cause no parent query')
+  assert.equal(await tool('bash', `rsrs remember 'fact >out --parent fake' --importance trivial --merge-ids abcdef0100004000 --parent ${parent}`), undefined)
+  const target = 'bcdef012-0000-4000-8000-000000000000'
+  let attached = parent, live = true, targetStatus = 'ok'
+  control.impl = args => {
+    const id = args[1]
+    if (id === target && targetStatus !== 'ok') return { status: targetStatus }
+    if (id === parent && !live) return { status: 'fail' }
+    return { status: 'ok', summary: { id }, details: { entry: { id, content: 'Existing record', parent_id: id === target ? attached : '' } } }
+  }
+  for (const command of [`rsrs update ${target} --importance important`, `rsrs update --importance important ${target}`, `rsrs update --importance=important ${target}`]) {
+    resetCalls()
+    assert.equal(await tool('powershell', command), undefined)
+    assert.deepEqual(calls.map(call => call.args), [['show', target], ['show', parent]])
+  }
+  for (const invalid of ['', 'none', target, target.toUpperCase(), target.slice(0, 8), null, 42]) {
+    attached = invalid; resetCalls()
+    const denied = await tool('bash', `rsrs update ${target} --importance important`)
+    assert.equal(denied.block, true)
+    assert.match(denied.reason, /attach this record/)
+    assert.deepEqual(calls.map(call => call.args), [['show', target]])
+  }
+  attached = parent; live = false; resetCalls()
+  assert.equal((await tool('powershell', `rsrs update ${target} --importance important`)).block, true)
+  assert.deepEqual(calls.map(call => call.args), [['show', target], ['show', parent]])
+  for (const status of ['fail', 'skip']) {
+    targetStatus = status; resetCalls()
+    assert.equal((await tool('bash', `rsrs update ${target} --importance important`)).block, true)
+    assert.deepEqual(calls.map(call => call.args), [['show', target]])
+  }
+  control.impl = () => ({ status: 'ok', summary: {}, details: {} })
+  assert.equal((await tool('powershell', `rsrs update ${parent} --parent ${parent}`)).block, true)
+  control.impl = () => { throw new Error('private engine diagnostics') }
+  const denied = await tool('powershell', `& 'C:\\tools\\rsrs.exe' remember fact --importance important --parent ${parent}`)
+  assert.equal(denied.block, true)
+  assert.doesNotMatch(denied.reason, /private engine diagnostics/)
+  const controller = new AbortController()
+  h.ctx.signal = controller.signal
+  control.impl = async () => { controller.abort(); return new Promise(() => {}) }
+  assert.equal((await tool('bash', `rsrs remember fact --importance important --parent ${parent}`)).block, true)
+  groups++
+}
+
 // --- Probe states ---------------------------------------------------------
 
 // Healthy engine: recall only, no status note, user history untouched, probe once per session.

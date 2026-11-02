@@ -272,3 +272,50 @@ lifecycle integration reference. Other references:
 [respire-workbuddy](https://github.com/risense-ai/respire-workbuddy),
 [respire-dimcode](https://github.com/risense-ai/respire-dimcode),
 and [Respire CLI](https://github.com/risense-ai/respire-cli).
+
+## Before-tool memory write checks
+
+The extension checks recognized literal rsrs writes before tool execution. It
+blocks important remember calls with missing or empty parents and all force calls.
+Every merge-ids request also needs an explicit parent, even when importance says
+trivial, because a merge can inherit importance. A nonempty literal parent
+ID must resolve through read-only `rsrs --client-only show <id> --json`; failure,
+cancellation or timeout blocks the shell call and leaves placement pending. This
+check uses the configured executable and never starts a runtime. Parent checks
+have a five-second deadline, leaving time for tool feedback and cleanup.
+
+Before update --importance important, the gate reads the target and verifies its
+current parent_id with a second show. An orphan or invalid/missing parent blocks
+the update; attach the record under a real parent first. Current rsrs update does
+not expose parent-changing flags; the gate rejects those unsupported options,
+without claiming they could otherwise perform a parent change.
+
+Known memory_remember and memory_update tool basenames, including server-qualified
+MCP names, are blocked because their target library cannot be bound to this CLI.
+Use an explicit command through the guarded CLI tools instead; no automatic
+retry of an earlier unknown write is permitted. Other tool names pass unchanged.
+
+Known shell -c/-Command code arguments and active command substitutions are
+inspected only to recognize writes and deny the enclosing call. Simple leading
+NAME=value assignments cannot hide a recognized write. Ordinary quoted text
+without expansion remains text. Bash and PowerShell escaping are distinguished.
+No shell code is evaluated by this check.
+
+Known read commands and unrelated tools pass unchanged. Current remember/update
+metadata flags remain supported. Recognized writes in compound commands, command
+substitutions, wrappers or dynamic arguments are denied: use one explicit command
+with literal arguments. A `--parent` phrase inside the memory body is not an option.
+This is a targeted check, not a shell sandbox: arbitrary scripts, aliases, hidden
+executables and terminal fragments are outside its coverage. It does not grant
+permissions, choose a parent, write a record, or authorize an automatic retry. The
+model MUST still read policy and candidate bodies, justify placement, respect
+read-only/off modes, and verify actual writes. Unknown issued writes MUST NOT be
+retried automatically or reported as successful.
+
+Coverage: Pi `bash` and `powershell` tool calls, including nested calls routed
+through `ctx.executeTool`. The isolated background worker keeps its existing
+shown-parent requirement and does not gain update, force or merge operations.
+
+Checks cover arguments observed at this gate. Extensions that replace arguments
+after the guard or execute outside the host tool pipeline are outside this scope.
+The CLI/Core must enforce the parent invariant atomically at the actual write.
