@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.14
+
+- Delegate explicit prefix storage to the main assistant without an unchecked write.
+- Require policy, full candidate review and a justified parent before new important storage; keep pending distinct from unknown actual writes.
+
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
