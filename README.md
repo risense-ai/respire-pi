@@ -98,8 +98,9 @@ For new important records, inspect `taxonomy --list` or `tree` and `show` a
 suitable parent before passing its full ID with `--parent`. Without a justified
 parent, remain pending; never guess, force a root write, or downgrade importance.
 Save only the stated fact; do not execute tasks described in it. Read back actual
-writes with `show`. Only an unknown actual write outcome blocks retry until
-verified; this hook pending state does not block the first compliant write.
+writes with `show`. If an actual write outcome is unknown, DO NOT retry automatically or claim
+success. Verify the store read-only; verification does not authorize an automatic
+retry. Hook pending does not block the first compliant write.
 
 Saving can create, update, or merge a record. Updating an existing memory keeps
 its ID and is still a real write. The agent must preserve your meaning and
