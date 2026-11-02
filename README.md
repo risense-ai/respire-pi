@@ -15,7 +15,7 @@ https://github.com/risense-ai/respire-pi#readme first.
 Check Pi 1.3.0, Node.js 22+, and rsrs --version.
 Reuse my existing Respire engine and memory library. Run
 rsrs --client-only status --json. If the engine is missing, report that I
-need @rsrsai/cli. Let me handle login, library unlock, models, and runtime
+need rsrs-cli. Let me handle login, library unlock, models, and runtime
 setup through rsrs; do not collect secrets or manage the runtime.
 Inspect pi list to avoid duplicate installation, then run
 pi install npm:@rsrsai/pi. Preserve unrelated Pi configuration.
@@ -34,7 +34,7 @@ not been validated.
 Install the engine separately if needed:
 
 ```sh
-npm install -g @rsrsai/cli@latest
+npm install -g rsrs-cli@latest
 rsrs --version
 rsrs --client-only status --json
 ```

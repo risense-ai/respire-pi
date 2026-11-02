@@ -13,7 +13,7 @@ npm 包名为 `@rsrsai/pi`。
 请安装 Respire Pi 插件 @rsrsai/pi，先阅读
 https://github.com/risense-ai/respire-pi#readme。
 检查 Pi 1.3.0、Node.js 22+ 和 rsrs --version。复用我的现有引擎和记忆库，
-运行 rsrs --client-only status --json。缺少引擎时告知需要安装 @rsrsai/cli。
+运行 rsrs --client-only status --json。缺少引擎时告知需要安装 rsrs-cli。
 登录、解锁、模型和 runtime 由我通过 rsrs 操作，不收集密码或管理 runtime。
 先检查 pi list，避免重复安装，再运行 pi install npm:@rsrsai/pi。
 保留其他 Pi 配置。重启 Pi 或执行 /reload 后，验证真实召回及其标题上下文。
@@ -28,7 +28,7 @@ https://github.com/risense-ai/respire-pi#readme。
 如缺少引擎，单独安装并检查：
 
 ```sh
-npm install -g @rsrsai/cli@latest
+npm install -g rsrs-cli@latest
 rsrs --version
 rsrs --client-only status --json
 ```
