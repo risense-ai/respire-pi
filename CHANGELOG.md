@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.16
+
+- Migrate the documented engine install entry from the deprecated `@rsrsai/cli` package to `rsrs-cli` in both READMEs; the `rsrs` command name and the `@rsrsai/pi` plugin package are unchanged.
+
 ## 0.1.15
 
 - Reject recognized writes inside known shell code arguments, command substitutions and environment-assignment prefixes; preserve literal quoted text and normal reads.
