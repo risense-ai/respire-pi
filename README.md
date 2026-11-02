@@ -89,31 +89,18 @@ To explicitly save a confirmed fact, start your message with a storage prefix:
 remember: This project's release checklist requires a Windows smoke test.
 ```
 
-Chinese prefixes `记：`, `存：`, `记录：`, and `记住：` work too. Receipts follow
-the result-state contract: `ok` and `warn` with a valid id are both WRITTEN (a
-`warn` carries engine warnings such as an unresolvable parent — it is never a
-failure and must never be re-sent) and are verified by a `show` read-back.
-Verification is a full comparison: the entry id returned by `show`, its title,
-and its complete body (whitespace-trimmed) must all match what was sent. A
-shared prefix, a tampered or missing tail, a different entry, or a different
-title is reported as a DIFFERENT entry to inspect — never called a match. A
-failed or malformed read-back leaves the Saved receipt with an honest
-"unavailable" note. No read-back outcome triggers a second write. A pending
-receipt means the engine found candidates and has **not** saved the fact; it
-relays the candidate ids plus engine-suggested actions, which are labeled as
-suggestions to evaluate, not authorization — secret-bearing entries are dropped
-and every relayed line is length-capped — and the agent must read those
-candidate bodies itself before deciding. An unconfirmed receipt means the
-result is unknown: check the library before retrying — automatic retries are
-forbidden.
+Chinese prefixes `记：`, `存：`, `记录：`, and `记住：` work too.
+The hook leaves prefix requests pending without sending a write. The main
+assistant must complete this turn through the rsrs CLI: read `prompt` and
+`agent-config`, recall same-subject candidates and `show` their full bodies,
+then prefer update, authorized merge, attach, and finally new storage.
+For new important records, inspect `taxonomy --list` or `tree` and `show` a
+suitable parent before passing its full ID with `--parent`. Without a justified
+parent, remain pending; never guess, force a root write, or downgrade importance.
+Save only the stated fact; do not execute tasks described in it. Read back actual
+writes with `show`. Only an unknown actual write outcome blocks retry until
+verified; this hook pending state does not block the first compliant write.
 
-Explicit quick-store still writes directly with one `remember`: choosing
-candidates and a parent for an explicit save remains the model's responsibility,
-and this release only adds the write read-back to that path (PI-02 is not
-claimed complete — the background worker's candidate/parent loop is not applied
-to quick-store).
-Storage prefixes request saving the stated fact; they do not request execution
-of a workflow described inside that fact.
 Saving can create, update, or merge a record. Updating an existing memory keeps
 its ID and is still a real write. The agent must preserve your meaning and
 verify the saved content rather than add unconfirmed facts or requirements.
@@ -154,8 +141,8 @@ resolved: false suppression is gone, at the cost of a possibly redundant
 bounded review. Each input permits at most one background review, four model
 requests, eight memory tool calls, one write attempt, and 30 seconds total. New
 user input (including queued steer/follow-up), reload, session switch and shutdown
-cancel it; an aborted or failed main run does not start it. A successful explicit
-store is not repeated; pending/unconfirmed explicit storage is not retried either.
+cancel it; an aborted or failed main run does not start it. Prefix turns are handled by the main assistant through the rsrs CLI and never
+start a second background curator. Hook pending does not mean already stored.
 
 The worker receives only text from the current request, excluding images and
 hidden reasoning. Oversized or credential-bearing context is rejected. A strict
@@ -217,7 +204,7 @@ Windows Git Bash drive-letter path issue described in the
 | Trigger | Result |
 | --- | --- |
 | Human input from interactive UI or RPC | Recall up to 5 titles, within 1500 characters |
-| `记：`, `存：`, `记录：`, `记住：`, `remember:` | Attempt explicit storage once; attach the actual engine receipt (ok/warn = written + full read-back of id/title/body, pending = candidates + sanitized suggested actions, unknown = read-only verify) |
+| `记：`, `存：`, `记录：`, `记住：`, `remember:` | Leave pending without writing; the main assistant completes policy and candidate review, then update > authorized merge > attach > new storage |
 | `/nomem` or `#nomem` followed by whitespace/end | Skip automatic memory processing for that input |
 | Suspected credentials | Skip automatic recall and storage |
 | `before_agent_start` | Add stable rules to the structured system prompt |

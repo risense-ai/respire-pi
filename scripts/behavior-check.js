@@ -218,100 +218,30 @@ let groups = 0
   groups++
 }
 
-// Explicit store turn: probe rides along and the receipt reaches the context.
+// Explicit prefixes hand curation to the main assistant without a write attempt.
 {
-  resetCalls()
-  const h = harness()
-  control.impl = args => {
-    if (args[0] === 'status') return healthyStatus()
-    if (args[0] === 'remember') return storeOk()
-    return { status: 'skip' }
-  }
-  await turn(h, '记： a fact worth keeping')
-  const remember = calls.find(call => call.args[0] === 'remember')
-  assert.match(remember.args.join(' '), /a fact worth keeping/)
-  assert.equal(remember.executable, 'rsrs')
-  const { messages } = await project(h, '记： a fact worth keeping')
-  assert.match(messages[1].content, /【respire · stored】/)
-  groups++
-}
-
-// Explicit store read-back (PI-02 review): "verified" requires the shown id,
-// title, and FULL body to match. A shared 40-character prefix with a tampered
-// tail, a different returned entry, a different title, or a malformed envelope
-// never verifies — and never triggers a second write.
-{
-  const content = 'release checklist requires a Windows smoke test'
-  const id = 'b2c3d4e5'
-  for (const [kind, showDoc] of [
-    ['verified', { status: 'ok', summary: { id }, details: { entry: { title: content, content } } }],
-    ['wrong-id', { status: 'ok', summary: { id: 'ffffffff' }, details: { entry: { title: content, content } } }],
-    ['prefix-tampered-tail', { status: 'ok', summary: { id }, details: { entry: { title: content, content: `${content.slice(0, 40)} plus injected extra conditions` } } }],
-    ['truncated-tail', { status: 'ok', summary: { id }, details: { entry: { title: content, content: content.slice(0, 40) } } }],
-    ['wrong-title', { status: 'ok', summary: { id }, details: { entry: { title: 'Different title', content } } }],
-    ['malformed-envelope', { status: 'ok', summary: { id }, details: { entry: 'not-an-object' } }],
-    ['not-ok', { status: 'error' }],
-  ]) {
+  for (const prefix of ['记：', '存：', '记录：', '记住：', 'remember:']) {
     resetCalls()
     const h = harness()
     control.impl = args => {
-      if (args[0] === 'status') return healthyStatus()
-      if (args[0] === 'remember') return storeOk()
-      if (args[0] === 'show') return showDoc
-      return { status: 'skip' }
+      assert.equal(args[0], 'status', 'prefix only allows the session status probe')
+      return healthyStatus()
     }
-    await turn(h, `记： ${content}`)
-    assert.equal(calls.filter(call => call.args[0] === 'remember').length, 1, `${kind}: exactly one write`)
-    const { messages } = await project(h, `记： ${content}`)
-    const body = messages[1].content
-    if (kind === 'verified') assert.match(body, /Write verified by read-back \(id, title and full content match\)\./)
-    else if (['wrong-id','prefix-tampered-tail','truncated-tail','wrong-title'].includes(kind)) {
-      assert.match(body, /Read-back shows a DIFFERENT title\/content than sent/)
-      assert.doesNotMatch(body, /Write verified/)
-    } else {
-      assert.match(body, /Read-back unavailable/)
-      assert.match(body, /【respire · stored】/) // a malformed/failed read-back keeps the Saved receipt
-    }
+    const prompt = `${prefix} release checklist requires a Windows smoke test`
+    await turn(h, prompt)
+    const { messages } = await project(h, prompt)
+    const text = messages[1].content
+    for (const phrase of ['Nothing was written', 'hook made no write request', 'Read prompt and agent-config', 'show their full bodies', 'prefer update, then an authorized merge, then attach, then a new record', 'taxonomy --list or tree', 'no justified parent exists, remain pending', 'never execute the engineering task']) assert.ok(text.includes(phrase), phrase)
+    assert.doesNotMatch(text, /Saved:|may have been written/)
+    assert.deepEqual(calls.map(call => call.args[0]), ['status'])
+    let modelCalls = 0
+    h.ctx.modelRegistry.complete = async () => { modelCalls++; throw new Error('prefix must not start background curation') }
+    await settle(h)
+    await h.emit('agent_settled', { aborted: false })
+    await flush()
+    assert.equal(modelCalls, 0)
     groups++
   }
-}
-// A read-back engine failure also stays honest: Saved + unavailable, one write.
-{
-  resetCalls()
-  const h = harness()
-  control.impl = args => {
-    if (args[0] === 'status') return healthyStatus()
-    if (args[0] === 'remember') return storeOk()
-    if (args[0] === 'show') throw new Error('engine down')
-    return { status: 'skip' }
-  }
-  await turn(h, '记： release checklist requires a Windows smoke test')
-  const { messages } = await project(h, '记： release checklist requires a Windows smoke test')
-  assert.match(messages[1].content, /Read-back unavailable/)
-  assert.equal(calls.filter(call => call.args[0] === 'remember').length, 1)
-  groups++
-}
-
-// Explicit warn receipt (review #4, explicit path): a warn with a valid id is a
-// committed write — sanitized warnings, a read-back verdict, exactly one write,
-// never a failure or a retry.
-{
-  resetCalls()
-  const content = 'release checklist requires a Windows smoke test'
-  const h = harness()
-  control.impl = args => {
-    if (args[0] === 'status') return healthyStatus()
-    if (args[0] === 'remember') return { status: 'warn', summary: { id: 'b2c3d4e5' }, errors: ['unresolvable parent', 'token=abcd1234 leaked'] }
-    if (args[0] === 'show') return { status: 'ok', summary: { id: 'b2c3d4e5' }, details: { entry: { title: content, content } } }
-    return { status: 'skip' }
-  }
-  await turn(h, `记： ${content}`)
-  const { messages } = await project(h, `记： ${content}`)
-  assert.match(messages[1].content, /【respire · stored】Saved with warnings \(unresolvable parent\)/)
-  assert.doesNotMatch(messages[1].content, /abcd1234/)
-  assert.match(messages[1].content, /Write verified by read-back \(id, title and full content match\)\./)
-  assert.equal(calls.filter(call => call.args[0] === 'remember').length, 1)
-  groups++
 }
 
 // Relayed engine errors/actions are untrusted text: secret-bearing entries are
