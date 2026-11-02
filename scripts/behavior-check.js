@@ -145,7 +145,7 @@ let groups = 0
   resetCalls()
   assert.equal(await tool('powershell', `rsrs update ${target} --importance important`), undefined)
   assert.deepEqual(calls.map(call => call.args), [['show', target], ['show', parent]])
-  for (const invalid of ['', 'none', target, null, 42]) {
+  for (const invalid of ['', 'none', target, target.toUpperCase(), target.slice(0, 8), null, 42]) {
     attached = invalid; resetCalls()
     const denied = await tool('bash', `rsrs update ${target} --importance important`)
     assert.equal(denied.block, true)
