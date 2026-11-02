@@ -2,7 +2,7 @@
 
 ## 0.1.16
 
-- Migrate the documented engine install entry from the deprecated `@rsrsai/cli` package to `rsrs-cli` in both READMEs; the `rsrs` command name and the `@rsrsai/pi` plugin package are unchanged.
+- Migrate the documented engine install entry from the deprecated `@rsrsai/cli` package to `rsrs-cli` in both READMEs and the runtime status hint; the `rsrs` command name and the `@rsrsai/pi` plugin package are unchanged.
 
 ## 0.1.15
 
