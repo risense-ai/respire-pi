@@ -90,6 +90,12 @@ let groups = 0
   const tool = (toolName, command) => h.emit('tool_call', { toolName, input: { command } })
   const unsafe = [
     'rsrs remember fact --importance important',
+    `rsrs >out remember fact --importance important --force`,
+    `rsrs --json 2>out remember fact --importance important --force`,
+    `2>/dev/null rsrs remember fact --importance important --force`,
+    `2>&1 rsrs remember fact --importance important --force`,
+    `rsrs 2>&1 remember fact --importance important --force`,
+    `rsrs remember fact --merge-ids ${parent} --importance trivial`,
     `rsrs remember 'fact --parent ${parent}' --importance important`,
     'rsrs remember fact --importance important --parent ""',
     `rsrs remember fact --importance important --force --parent ${parent}`,
@@ -122,11 +128,38 @@ let groups = 0
   }
   assert.equal(calls.length, 4)
   assert.ok(calls.every(call => call.signal && !call.signal.aborted))
-  for (const command of ['rsrs show abcdef01 --json', 'rsrs recall remember --titles --json', 'rsrs recall rsrs --project remember', 'echo rsrs remember --importance important', 'rsrs --json --client-only recall remember --titles', 'rsrs --model-task-id remember --json --client-only recall remember', 'echo \'rsrs remember fact --importance important\'', 'echo ordinary', `rsrs update ${parent} --content 'fact'`, 'rsrs remember diary --importance trivial']) {
+  for (const command of ['rsrs show abcdef01 --json', 'rsrs recall remember --titles --json', 'rsrs >out recall remember --titles', '2>/dev/null rsrs recall remember --titles', 'rsrs recall rsrs --project remember', 'echo rsrs remember --importance important', 'rsrs --json --client-only recall remember --titles', 'rsrs --model-task-id remember --json --client-only recall remember', 'echo \'rsrs remember fact --importance important\'', 'echo ordinary', `rsrs update ${parent} --content 'fact'`, 'rsrs remember diary --importance trivial']) {
     assert.equal(await tool('bash', command), undefined)
   }
   assert.equal(await tool('other_tool', unsafe[0]), undefined)
   assert.equal(calls.length, 4, 'reads and unrelated tools cause no parent query')
+  assert.equal(await tool('bash', `rsrs remember 'fact >out --parent fake' --importance trivial --merge-ids abcdef0100004000 --parent ${parent}`), undefined)
+  const target = 'bcdef012-0000-4000-8000-000000000000'
+  let attached = parent, live = true, targetStatus = 'ok'
+  control.impl = args => {
+    const id = args[1]
+    if (id === target && targetStatus !== 'ok') return { status: targetStatus }
+    if (id === parent && !live) return { status: 'fail' }
+    return { status: 'ok', summary: { id }, details: { entry: { id, content: 'Existing record', parent_id: id === target ? attached : '' } } }
+  }
+  resetCalls()
+  assert.equal(await tool('powershell', `rsrs update ${target} --importance important`), undefined)
+  assert.deepEqual(calls.map(call => call.args), [['show', target], ['show', parent]])
+  for (const invalid of ['', 'none', target, null, 42]) {
+    attached = invalid; resetCalls()
+    const denied = await tool('bash', `rsrs update ${target} --importance important`)
+    assert.equal(denied.block, true)
+    assert.match(denied.reason, /attach this record/)
+    assert.deepEqual(calls.map(call => call.args), [['show', target]])
+  }
+  attached = parent; live = false; resetCalls()
+  assert.equal((await tool('powershell', `rsrs update ${target} --importance important`)).block, true)
+  assert.deepEqual(calls.map(call => call.args), [['show', target], ['show', parent]])
+  for (const status of ['fail', 'skip']) {
+    targetStatus = status; resetCalls()
+    assert.equal((await tool('bash', `rsrs update ${target} --importance important`)).block, true)
+    assert.deepEqual(calls.map(call => call.args), [['show', target]])
+  }
   control.impl = () => ({ status: 'ok', summary: {}, details: {} })
   assert.equal((await tool('powershell', `rsrs update ${parent} --parent ${parent}`)).block, true)
   control.impl = () => { throw new Error('private engine diagnostics') }
