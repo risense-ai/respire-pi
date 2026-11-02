@@ -295,6 +295,12 @@ MCP names, are blocked because their target library cannot be bound to this CLI.
 Use an explicit command through the guarded CLI tools instead; no automatic
 retry of an earlier unknown write is permitted. Other tool names pass unchanged.
 
+Known shell -c/-Command code arguments and active command substitutions are
+inspected only to recognize writes and deny the enclosing call. Simple leading
+NAME=value assignments cannot hide a recognized write. Ordinary quoted text
+without expansion remains text. Bash and PowerShell escaping are distinguished.
+No shell code is evaluated by this check.
+
 Known read commands and unrelated tools pass unchanged. Current remember/update
 metadata flags remain supported. Recognized writes in compound commands, command
 substitutions, wrappers or dynamic arguments are denied: use one explicit command

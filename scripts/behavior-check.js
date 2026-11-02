@@ -90,6 +90,21 @@ let groups = 0
   const tool = (toolName, command) => h.emit('tool_call', { toolName, input: command && typeof command === 'object' ? command : { command } })
   const unsafe = [
     'rsrs remember fact --importance important',
+    "bash -c 'rsrs remember fact --importance important --force'",
+    "bash -lic 'rsrs remember fact --importance important --force'",
+    "pwsh -NoProfile -ExecutionPolicy Bypass -Command 'rsrs remember fact --importance important --force'",
+    'pwsh -Command rsrs remember fact --importance important --force',
+    `bash -c 'rsrs remember fact --importance important --parent ${parent}'`,
+    `rsrs recall "$(rsrs remember fact --importance important --parent ${parent})"`,
+
+    "pwsh -Command 'rsrs remember fact --importance important --force'",
+    "powershell.exe -Command 'rsrs remember fact --importance important --force'",
+    'RSRS_CLIENT_ONLY=1 rsrs remember fact --importance important --force',
+    'echo "$(rsrs remember fact --importance important --force)"',
+    'rsrs recall "$(rsrs remember fact --importance important --force)"',
+    'echo "$(echo "$(rsrs remember fact --importance important --force)")"',
+    "echo ok\nrsrs remember fact --importance important --force",
+
     `rsrs >out remember fact --importance important --force`,
     `rsrs --json 2>out remember fact --importance important --force`,
     `2>/dev/null rsrs remember fact --importance important --force`,
@@ -115,6 +130,8 @@ let groups = 0
   for (const name of ['bash', 'powershell']) {
     for (const command of unsafe) assert.equal((await tool(name, command)).block, true, command)
   }
+  assert.equal((await tool('bash', 'echo `rsrs remember fact --importance important --force`')).block, true)
+  assert.equal((await tool('powershell', String.raw`echo "\$(rsrs remember fact --importance important --force)"`)).block, true)
   for (const name of ['memory_remember', 'memory_update', 'mcp__renamed__memory_remember', 'mcp__other__memory_update']) {
     const denied = await tool(name, { content: 'fact', importance: 'trivial', parent })
     assert.equal(denied.block, true)
@@ -133,10 +150,12 @@ let groups = 0
   }
   assert.equal(calls.length, 4)
   assert.ok(calls.every(call => call.signal && !call.signal.aborted))
-  for (const command of ['rsrs show abcdef01 --json', 'rsrs recall remember --titles --json', 'rsrs >out recall remember --titles', '2>/dev/null rsrs recall remember --titles', 'rsrs recall rsrs --project remember', 'echo rsrs remember --importance important', 'rsrs --json --client-only recall remember --titles', 'rsrs --model-task-id remember --json --client-only recall remember', 'echo \'rsrs remember fact --importance important\'', 'echo ordinary', `rsrs update ${parent} --content 'fact'`, 'rsrs remember diary --importance trivial']) {
+  for (const command of ['rsrs show abcdef01 --json', 'rsrs recall remember --titles --json', 'rsrs >out recall remember --titles', '2>/dev/null rsrs recall remember --titles', 'rsrs recall rsrs --project remember', 'echo rsrs remember --importance important', 'rsrs --json --client-only recall remember --titles', 'rsrs --model-task-id remember --json --client-only recall remember', 'echo \'rsrs remember fact --importance important\'', 'echo ordinary', "bash -c 'rsrs recall remember --titles'", "pwsh -NoProfile -Command 'rsrs recall remember --titles'", 'echo "rsrs remember fact --importance important --force"', "echo '$(rsrs remember fact --importance important --force)'", "rsrs recall 'rsrs remember fact --importance important --force'", "rsrs recall 'bash -c rsrs remember fact'", "bash -c 'echo rsrs remember fact'", 'RSRS_CLIENT_ONLY=1 rsrs recall remember --titles',  `rsrs update ${parent} --content 'fact'`, 'rsrs remember diary --importance trivial']) {
     assert.equal(await tool('bash', command), undefined)
   }
   assert.equal(await tool('other_tool', unsafe[0]), undefined)
+  assert.equal(await tool('powershell', 'echo `rsrs remember fact --importance important --force`'), undefined)
+  assert.equal(await tool('bash', String.raw`echo "\$(rsrs remember fact --importance important --force)"`), undefined)
   for (const name of ['memory_recall', 'mcp__other__memory_show', 'mcp__other__unrelated', 'memory_remember_extra']) {
     assert.equal(await tool(name, { query: 'remember' }), undefined)
   }
