@@ -231,7 +231,7 @@ let groups = 0
     await turn(h, prompt)
     const { messages } = await project(h, prompt)
     const text = messages[1].content
-    for (const phrase of ['Nothing was written', 'hook made no write request', 'Read prompt and agent-config', 'show their full bodies', 'prefer update, then an authorized merge, then attach, then a new record', 'taxonomy --list or tree', 'no justified parent exists, remain pending', 'never execute the engineering task']) assert.ok(text.includes(phrase), phrase)
+    for (const phrase of ['Nothing was written', 'hook made no write request', 'you MUST read prompt and agent-config', 'show their full bodies', 'Prefer update, then an authorized merge, then attach, then a new record', 'taxonomy --list or tree', 'permitted ONLY AFTER', 'DO NOT retry automatically or claim success', 'Verification does not authorize an automatic retry', 'After every actual write, you MUST read it back with show', 'no justified parent exists, you MUST remain pending', 'DO NOT execute the engineering task']) assert.ok(text.includes(phrase), phrase)
     assert.doesNotMatch(text, /Saved:|may have been written/)
     assert.deepEqual(calls.map(call => call.args[0]), ['status'])
     let modelCalls = 0
