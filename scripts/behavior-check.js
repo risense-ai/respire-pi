@@ -87,7 +87,7 @@ let groups = 0
 {
   resetCalls()
   const h = harness(), parent = 'abcdef01-0000-4000-8000-000000000000'
-  const tool = (toolName, command) => h.emit('tool_call', { toolName, input: { command } })
+  const tool = (toolName, command) => h.emit('tool_call', { toolName, input: command && typeof command === 'object' ? command : { command } })
   const unsafe = [
     'rsrs remember fact --importance important',
     `rsrs >out remember fact --importance important --force`,
@@ -115,6 +115,11 @@ let groups = 0
   for (const name of ['bash', 'powershell']) {
     for (const command of unsafe) assert.equal((await tool(name, command)).block, true, command)
   }
+  for (const name of ['memory_remember', 'memory_update', 'mcp__renamed__memory_remember', 'mcp__other__memory_update']) {
+    const denied = await tool(name, { content: 'fact', importance: 'trivial', parent })
+    assert.equal(denied.block, true)
+    assert.match(denied.reason, /target library cannot be verified/)
+  }
   assert.equal(calls.length, 0, 'unsafe parameters are blocked before any engine call')
   control.impl = args => {
     assert.deepEqual(args, ['show', parent])
@@ -132,6 +137,9 @@ let groups = 0
     assert.equal(await tool('bash', command), undefined)
   }
   assert.equal(await tool('other_tool', unsafe[0]), undefined)
+  for (const name of ['memory_recall', 'mcp__other__memory_show', 'mcp__other__unrelated', 'memory_remember_extra']) {
+    assert.equal(await tool(name, { query: 'remember' }), undefined)
+  }
   assert.equal(calls.length, 4, 'reads and unrelated tools cause no parent query')
   assert.equal(await tool('bash', `rsrs remember 'fact >out --parent fake' --importance trivial --merge-ids abcdef0100004000 --parent ${parent}`), undefined)
   const target = 'bcdef012-0000-4000-8000-000000000000'
@@ -142,9 +150,11 @@ let groups = 0
     if (id === parent && !live) return { status: 'fail' }
     return { status: 'ok', summary: { id }, details: { entry: { id, content: 'Existing record', parent_id: id === target ? attached : '' } } }
   }
-  resetCalls()
-  assert.equal(await tool('powershell', `rsrs update ${target} --importance important`), undefined)
-  assert.deepEqual(calls.map(call => call.args), [['show', target], ['show', parent]])
+  for (const command of [`rsrs update ${target} --importance important`, `rsrs update --importance important ${target}`, `rsrs update --importance=important ${target}`]) {
+    resetCalls()
+    assert.equal(await tool('powershell', command), undefined)
+    assert.deepEqual(calls.map(call => call.args), [['show', target], ['show', parent]])
+  }
   for (const invalid of ['', 'none', target, target.toUpperCase(), target.slice(0, 8), null, 42]) {
     attached = invalid; resetCalls()
     const denied = await tool('bash', `rsrs update ${target} --importance important`)

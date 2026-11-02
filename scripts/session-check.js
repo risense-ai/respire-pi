@@ -27,7 +27,7 @@ const until=async predicate=>{const end=Date.now()+20000;while(!predicate()){ass
 let count=0
 
 async function fixture(mode) {
-  const bodies=[]
+  const bodies=[],nestedBlocks=[]
   const dir=mkdtempSync(join(home,'case-'));const agentDir=join(dir,'agent');mkdirSync(agentDir)
   const file=join(dir,'cli-state.json');writeFileSync(file,JSON.stringify({calls:[],writes:[],oldContent:'Windows and Linux release checks are required.',mode}))
   const script=join(dir,'rsrs.mjs')
@@ -66,17 +66,24 @@ if(!doc)throw Error('unsupported command');console.log(JSON.stringify(doc));`)
           pi.registerTool({name:'bash',label:'Synthetic shell',description:'Synthetic shell body must never run.',
             parameters:{type:'object',properties:{command:{type:'string'}},required:['command']},
             execute:async()=>{bodies.push('bash');return {content:[{type:'text',text:'unexpected dispatch'}]}}})
+          for(const name of ['mcp__fixture__memory_remember','mcp__fixture__memory_update'])pi.registerTool({name,label:'Synthetic memory write',description:'Synthetic memory body must never run.',
+            parameters:{type:'object',properties:{content:{type:'string'},importance:{type:'string'},parent:{type:'string'}}},
+            execute:async()=>{bodies.push(name);return {content:[{type:'text',text:'unexpected memory dispatch'}]}}})
           pi.registerTool({name:'orchestrate',label:'Synthetic nested caller',description:'Call the synthetic shell through the host.',
             parameters:{type:'object',properties:{}},
             execute:async(_id,_args,signal,_update,ctx)=>{
               bodies.push('orchestrate')
               const outcome=await ctx.executeTool('bash',{command:'rsrs remember fact --importance important'},{signal})
+              for(const name of ['mcp__fixture__memory_remember','mcp__fixture__memory_update']){
+                const denied=await ctx.executeTool(name,{content:fact,importance:'trivial',parent},{signal})
+                nestedBlocks.push({name,isError:denied.isError,content:JSON.stringify(denied.result)})
+              }
               return {...outcome.result,isError:outcome.isError}
             }})
         }
       }]})
     await loader.reload()
-    const result=await createAgentSession({cwd:dir,agentDir,modelRuntime:runtime,model:faux.getModel(),settingsManager:settings,sessionManager:manager,resourceLoader:loader,tools:mode.endsWith('guard')?['bash','orchestrate']:[],noTools:'all',sessionStartEvent})
+    const result=await createAgentSession({cwd:dir,agentDir,modelRuntime:runtime,model:faux.getModel(),settingsManager:settings,sessionManager:manager,resourceLoader:loader,tools:mode.endsWith('guard')?['bash','orchestrate','mcp__fixture__memory_remember','mcp__fixture__memory_update']:[],noTools:'all',sessionStartEvent})
     await result.session.bindExtensions({mode:'print',onError:error=>{throw Error(JSON.stringify(error))}})
     return {...result,services:{cwd:dir,agentDir,modelRuntime:runtime,settingsManager:settings,resourceLoader:loader,diagnostics:[]},diagnostics:[]}
   }
@@ -102,7 +109,8 @@ if(!doc)throw Error('unsupported command');console.log(JSON.stringify(doc));`)
     }
     main++
     if((mode==='front-guard'||mode==='nested-guard')&&main===1)return fauxAssistantMessage([
-      fauxToolCall(mode==='front-guard'?'bash':'orchestrate',mode==='front-guard'?{command:'rsrs remember fact --importance important'}:{})
+      fauxToolCall(mode==='front-guard'?'bash':'orchestrate',mode==='front-guard'?{command:'rsrs remember fact --importance important'}:{}),
+      ...(mode==='front-guard'?['mcp__fixture__memory_remember','mcp__fixture__memory_update'].map(name=>fauxToolCall(name,{content:fact,importance:'trivial',parent})):[])
     ],{stopReason:'toolUse'})
     if(mode==='main-error')return fauxAssistantMessage('',{stopReason:'error',errorMessage:'synthetic main failure'})
     if(mode==='main-abort')await new Promise((_,reject)=>{holdMain=true;options.signal.addEventListener('abort',()=>reject(Error('synthetic cancellation')),{once:true})})
@@ -110,7 +118,7 @@ if(!doc)throw Error('unsupported command');console.log(JSON.stringify(doc));`)
     return fauxAssistantMessage('Normal user answer.')
   }
   faux.setResponses(Array.from({length:30},()=>response))
-  return {session,owner,state,manager,observed,bodies,main:()=>main,background:()=>background,held:()=>holdMain,release:()=>mainRelease(),cleanup:async()=>{await owner.session.abort();await owner.session.extensionRunner.emit({type:'session_shutdown'});owner.session.dispose()}}
+  return {session,owner,state,manager,observed,bodies,nestedBlocks,main:()=>main,background:()=>background,held:()=>holdMain,release:()=>mainRelease(),cleanup:async()=>{await owner.session.abort();await owner.session.extensionRunner.emit({type:'session_shutdown'});owner.session.dispose()}}
 }
 
 for(const mode of ['front-guard','nested-guard']){
@@ -120,12 +128,15 @@ for(const mode of ['front-guard','nested-guard']){
   assert.deepEqual(h.bodies,mode==='front-guard'?[]:['orchestrate'],'blocked shell body must not dispatch')
   assert.equal(h.state().calls.length,0,'missing parent requires no engine query')
   assert.ok(h.session.messages.some(message=>message.role==='toolResult'&&message.isError&&JSON.stringify(message.content).includes('blocked this tool call before execution')))
+  const denied=mode==='front-guard'?h.session.messages.filter(message=>message.role==='toolResult'&&message.toolName.startsWith('mcp__')).map(message=>({isError:message.isError,content:JSON.stringify(message.content)})):h.nestedBlocks
+  assert.equal(denied.length,2,'both known memory writes reach the host gate')
+  assert.ok(denied.every(result=>result.isError&&result.content.includes('target library cannot be verified')))
   assert.equal(h.main(),2)
   assert.equal(h.background(),0)
   count++
  }catch(error){console.error('Session fixture failed:',mode,JSON.stringify(h.state()),JSON.stringify(h.session.messages.filter(message=>message.role==='toolResult')));throw error}finally{await h.cleanup()}
 }
-console.log('Real front guard: direct and nested shell bodies blocked')
+console.log('Real front guard: direct and nested shell/MCP bodies blocked')
 
 for(const mode of ['none','write','preserve-existing','failure','queue','cancel','switch','reload','main-error','main-abort']){
  const h=await fixture(mode)
